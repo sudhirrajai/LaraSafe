@@ -15,7 +15,8 @@ const isActiveStartsWith = (prefix) => currentUrl.value.startsWith(prefix)
     <div>
       <div class="brand-logo d-flex align-items-center justify-content-between">
         <Link href="/" class="text-nowrap logo-img">
-          <img src="/public/assets/images/logos/logo.png" width="200" alt="" style="margin-top:10px; margin-bottom:-20px;" />
+        <img src="/public/assets/images/logos/logo.png" width="200" alt=""
+          style="margin-top:10px; margin-bottom:-20px;" />
         </Link>
         <div class="close-btn d-xl-none d-block js-side-toggle cursor-pointer" id="sidebarCollapse">
           <i class="ti ti-x fs-8"></i>
@@ -29,49 +30,51 @@ const isActiveStartsWith = (prefix) => currentUrl.value.startsWith(prefix)
           </li>
 
           <li class="sidebar-item">
-            <Link
-              :href="`/`"
-              :class="['sidebar-link','primary-hover-bg', { active: isActiveExact('/') }]"
-              aria-expanded="false"
-            >
-              <iconify-icon icon="solar:atom-line-duotone"></iconify-icon>
-              <span class="hide-menu">Dashboard</span>
+            <Link :href="`/`" :class="['sidebar-link', 'primary-hover-bg', { active: isActiveExact('/') }]"
+              aria-expanded="false">
+            <iconify-icon icon="solar:atom-line-duotone"></iconify-icon>
+            <span class="hide-menu">Dashboard</span>
             </Link>
           </li>
 
           <li class="sidebar-item">
-            <Link
-              :href="`/projects/manage-projects`"
-              :class="[
-                'sidebar-link','primary-hover-bg','justify-content-between',
-                { active: isActiveStartsWith('/projects') }
-              ]"
-              aria-expanded="false"
-            >
-              <div class="d-flex align-items-center gap-6">
-                <span class="d-flex">
-                  <iconify-icon icon="solar:screencast-2-line-duotone"></iconify-icon>
-                </span>
-                <span class="hide-menu">Manage Projects</span>
-              </div>
+            <Link :href="`/projects/manage-projects`" :class="[
+              'sidebar-link', 'primary-hover-bg', 'justify-content-between',
+              { active: isActiveStartsWith('/projects') }
+            ]" aria-expanded="false">
+            <div class="d-flex align-items-center gap-6">
+              <span class="d-flex">
+                <iconify-icon icon="solar:screencast-2-line-duotone"></iconify-icon>
+              </span>
+              <span class="hide-menu">Manage Projects</span>
+            </div>
             </Link>
           </li>
 
           <li class="sidebar-item">
-            <Link
-              :href="`/backups/manage-backups`"
-              :class="[
-                'sidebar-link','primary-hover-bg','justify-content-between',
-                { active: isActiveStartsWith('/backups') }
-              ]"
-              aria-expanded="false"
-            >
-              <div class="d-flex align-items-center gap-6">
-                <span class="d-flex">
-                  <iconify-icon icon="solar:chart-line-duotone"></iconify-icon>
-                </span>
-                <span class="hide-menu">Manage Backups</span>
-              </div>
+            <Link :href="`/backups/manage-backups`" :class="[
+              'sidebar-link', 'primary-hover-bg', 'justify-content-between',
+              { active: isActiveStartsWith('/backups') }
+            ]" aria-expanded="false">
+            <div class="d-flex align-items-center gap-6">
+              <span class="d-flex">
+                <iconify-icon icon="solar:chart-line-duotone"></iconify-icon>
+              </span>
+              <span class="hide-menu">Manage Backups</span>
+            </div>
+            </Link>
+          </li>
+          <li class="sidebar-item">
+            <Link :href="`/settings`" :class="[
+              'sidebar-link', 'primary-hover-bg', 'justify-content-between',
+              { active: isActiveStartsWith('/settings') }
+            ]" aria-expanded="false">
+            <div class="d-flex align-items-center gap-6">
+              <span class="d-flex">
+                <iconify-icon icon="solar:settings-line-duotone"></iconify-icon>
+              </span>
+              <span class="hide-menu">Settings</span>
+            </div>
             </Link>
           </li>
         </ul>
