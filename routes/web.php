@@ -7,6 +7,7 @@ use App\Http\Controllers\ProjectsController;
 use App\Http\Controllers\BackupController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\Auth\AuthController;
+use App\Http\Controllers\SettingsController;
 
 // Route::get('/login', [DashboardController::class, 'index'])->name('login');
 
@@ -50,5 +51,10 @@ Route::middleware('auth')->group(function () {
         Route::delete('/delete-created-backup/{id}', [BackupController::class, 'destroySubBackup'])->name('backups.destroyCreatedBackup');
         Route::post('/test-db-connection', [BackupController::class, 'testDatabaseConnection'])->name('test-db-connection');
         Route::post('/restore', [BackupController::class, 'restoreBackup'])->name('restore-backup');
+    });
+
+    Route::prefix('/settings')->group(function () {
+        Route::get('/', [SettingsController::class, 'index'])->name('settings');
+        Route::post('/{type}', [SettingsController::class, 'update']);
     });
 });
