@@ -189,6 +189,7 @@ const getLoadingMessage = () => {
                                     <th scope="col">Project Name</th>
                                     <th scope="col">Size</th>
                                     <th scope="col">Status</th>
+                                    <th scope="col">Next Backup</th>
                                     <th scope="col">Created At</th>
                                     <th scope="col">Actions</th>
                                 </tr>
@@ -202,6 +203,7 @@ const getLoadingMessage = () => {
                                     <td>{{ backup.project.name }}</td>
                                     <td>{{ formatSize(backup.size) }}</td>
                                     <td>{{ backup.status || 'N/A' }}</td>
+                                    <td>{{ formatDate(backup.next_backup_at) }}</td>
                                     <td>{{ formatDate(backup.created_at) }}</td>
                                     <td>
                                         <div class="d-flex">
