@@ -1,11 +1,10 @@
 <script setup>
 import MainLayout from '@/Layouts/MainLayout.vue'
-import { useForm } from '@inertiajs/vue3'
+import { useForm, router } from '@inertiajs/vue3'
 import { ref, computed, watch } from 'vue'
-import { router } from '@inertiajs/vue3'
-import axios from 'axios' // Import axios for API requests
+import axios from 'axios'
 
-// Load SweetAlert2 from CDN
+// SweetAlert2 (must be loaded globally)
 const Swal = window.Swal
 
 defineOptions({
@@ -26,14 +25,14 @@ const form = useForm({
   frequency: null,
   time: null,
   include_database: false,
-  db_source: 'env', // 'env', 'custom', 'project_config'
+  db_source: 'env', // env, custom, project_config
   db_host: '',
   db_port: '3306',
   db_name: '',
   db_username: '',
   db_password: '',
-  db_tables: 'all', // 'all', 'selected'
-  selected_tables: [],
+  db_tables: 'all',
+  selected_tables: '',
 })
 
 const touched = ref({
@@ -48,38 +47,96 @@ const touched = ref({
   db_password: false,
 })
 
+/* If BOTH frequency and time exist, treat auto backup as enabled */
 const autoBackupEnabled = ref(false)
 const showAdvancedDb = ref(false)
 
-/* ---- Watch backup prop to pre-populate form ---- */
+/* ---- Populate form with backup data ---- */
 watch(
   () => backup,
   (b) => {
     if (!b) return
-    form.project_id = b.project_id
-    form.file_name = b.file_name
-    form.storage_disk = b.storage_disk
-    form.frequency = b.frequency || null
-    form.time = b.time?.substr(0, 5) || null
-    form.include_database = b.include_database || false
-    autoBackupEnabled.value = !!b.frequency
+
+    form.project_id = b.project_id || ''
+    form.file_name = b.file_name || ''
+    form.storage_disk = b.storage_disk || 'local'
+    form.frequency = b.backup_frequency ?? b.frequency ?? null
+    // Normalize time to "HH:MM" if available
+    form.time = (b.backup_time ?? b.time) ? String((b.backup_time ?? b.time)).substr(0,5) : null
+
+    // include_database may be stored as 0/1 or boolean
+    form.include_database = !!(b.include_database || b.include_database === 1)
+
+    // autoBackupEnabled should be true only if both frequency and time have values
+    autoBackupEnabled.value = !!(form.frequency && form.time)
+
     if (b.database_config) {
       form.db_source = b.database_config.source || 'env'
       form.db_tables = b.database_config.tables || 'all'
-      form.selected_tables = b.database_config.selected_tables
-        ? b.database_config.selected_tables.join(', ')
-        : []
-      if (b.database_config.credentials) {
-        form.db_host = b.database_config.credentials.host || ''
-        form.db_port = b.database_config.credentials.port || '3306'
-        form.db_name = b.database_config.credentials.database || ''
-        form.db_username = b.database_config.credentials.username || ''
-        form.db_password = '' // Password is not sent back for security
+
+      // if selected_tables is array -> join to string, else use as-is
+      if (b.database_config.selected_tables) {
+        form.selected_tables = Array.isArray(b.database_config.selected_tables)
+          ? b.database_config.selected_tables.join(', ')
+          : b.database_config.selected_tables
+      } else {
+        form.selected_tables = ''
       }
+
+      // credentials should already be decrypted by controller and be an object
+      if (b.database_config.credentials && typeof b.database_config.credentials === 'object') {
+        const creds = b.database_config.credentials
+        form.db_host = creds.host || ''
+        form.db_port = creds.port || '3306'
+        form.db_name = creds.database || ''
+        form.db_username = creds.username || ''
+        // For security we do not pre-fill password field with the actual value
+        form.db_password = '' 
+      } else {
+        form.db_host = ''
+        form.db_port = '3306'
+        form.db_name = ''
+        form.db_username = ''
+        form.db_password = ''
+      }
+    } else {
+      // Reset DB fields if there is no db config
+      form.db_source = 'env'
+      form.db_tables = 'all'
+      form.selected_tables = ''
+      form.db_host = ''
+      form.db_port = '3306'
+      form.db_name = ''
+      form.db_username = ''
+      form.db_password = ''
     }
   },
   { immediate: true }
 )
+
+/* ---- Keep autoBackupEnabled in sync with frequency/time changes ---- */
+watch([() => form.frequency, () => form.time], ([f, t]) => {
+  // if both have values, ensure toggle is on
+  if (f && t) {
+    autoBackupEnabled.value = true
+  } else {
+    // don't automatically turn off if user explicitly enabled toggle,
+    // but keep this simple: if either is missing, keep toggle false so UI matches saved state
+    autoBackupEnabled.value = false
+  }
+})
+
+/* If user toggles the autoBackup switch off, clear freq/time locally (optional) */
+watch(autoBackupEnabled, (val) => {
+  if (!val) {
+    form.frequency = null
+    form.time = null
+  } else {
+    // if enabled and there was no value, set sensible defaults
+    if (!form.frequency) form.frequency = 'daily'
+    if (!form.time) form.time = form.time || new Date().toISOString().substr(11,5)
+  }
+})
 
 /* ---- Validation ---- */
 const errors = computed(() => {
@@ -100,40 +157,33 @@ const errors = computed(() => {
     }
   }
 
+  if (form.include_database && form.db_tables === 'selected') {
+    return {
+      ...baseErrors,
+      selected_tables: !form.selected_tables ? 'Please specify selected tables' : '',
+    }
+  }
+
   return baseErrors
 })
 
 const isValid = computed(() => {
-  return !Object.values(errors.value).some((error) => error !== '')
-})
-
-/* ---- Computed property for database source info ---- */
-const dbSourceInfo = computed(() => {
-  switch (form.db_source) {
-    case 'env':
-      return "Will use database credentials from project's .env file"
-    case 'project_config':
-      return 'Will use database credentials stored in project configuration'
-    case 'custom':
-      return 'Use custom database credentials for this backup'
-    default:
-      return ''
-  }
+  return !Object.values(errors.value).some(error => error !== '')
 })
 
 /* ---- Submit ---- */
 const handleSubmit = () => {
-  Object.keys(touched.value).forEach((key) => (touched.value[key] = true))
+  // mark touched for validation
+  Object.keys(touched.value).forEach(key => touched.value[key] = true)
 
   if (!isValid.value) {
     const errorList = Object.values(errors.value)
-      .filter((error) => error !== '')
-      .map((error) => `<li>${error}</li>`)
-      .join('')
-
+      .filter(error => error !== '')
+      .map(error => `<li>${error}</li>`)
+      .join("")
     Swal.fire({
-      icon: 'error',
-      title: 'Validation Error',
+      icon: "error",
+      title: "Validation Error",
       html: `<ul style="text-align:left;">${errorList}</ul>`,
     })
     return
@@ -159,7 +209,7 @@ const handleSubmit = () => {
       data.db_password = form.db_password
     }
 
-    if (form.db_tables === 'selected' && form.selected_tables.length > 0) {
+    if (form.db_tables === 'selected' && form.selected_tables) {
       data.selected_tables = form.selected_tables
     }
   }
@@ -169,26 +219,24 @@ const handleSubmit = () => {
     onSuccess: (page) => {
       const successMessage = page.props.flash?.status
       Swal.fire({
-        icon: 'success',
-        title: 'Success',
-        text: successMessage || 'Backup updated successfully!',
+        icon: "success",
+        title: "Success",
+        text: successMessage || "Backup updated successfully!",
       }).then(() => {
         router.visit('/backups/manage-backups')
       })
-      form.reset()
-      Object.keys(touched.value).forEach((key) => (touched.value[key] = false))
     },
     onError: (serverErrors) => {
       const errorList = Object.values(serverErrors)
         .flat()
-        .map((error) => `<li>${error}</li>`)
-        .join('')
+        .map(error => `<li>${error}</li>`)
+        .join("")
       Swal.fire({
-        icon: 'error',
-        title: 'Validation Error',
+        icon: "error",
+        title: "Validation Error",
         html: errorList ? `<ul style="text-align:left;">${errorList}</ul>` : 'An unexpected error occurred.',
       })
-    },
+    }
   })
 }
 
@@ -205,26 +253,26 @@ const testDatabaseConnection = () => {
   }
 
   axios.post('/backups/test-db-connection', testData)
-    .then((response) => {
+    .then(response => {
       if (response.data.success) {
         Swal.fire({
           icon: 'success',
           title: 'Connection Successful',
-          text: 'Database connection established successfully!',
+          text: 'Database connection established successfully!'
         })
       } else {
         Swal.fire({
           icon: 'error',
           title: 'Connection Failed',
-          text: response.data.message || 'Failed to connect to database',
+          text: response.data.message || 'Failed to connect to database'
         })
       }
     })
-    .catch((error) => {
+    .catch(error => {
       Swal.fire({
         icon: 'error',
         title: 'Connection Failed',
-        text: error.response?.data?.message || 'Failed to connect to database',
+        text: error.response?.data?.message || 'Failed to connect to database'
       })
     })
 }
@@ -241,8 +289,8 @@ const testDatabaseConnection = () => {
             <div class="mb-3">
               <label for="projectSelect" class="form-label">Select Project</label>
               <select
-                id="projectSelect"
                 class="form-select"
+                id="projectSelect"
                 v-model="form.project_id"
                 @blur="touched.project_id = true"
                 :class="{ 'is-invalid': errors.project_id && touched.project_id }"
@@ -262,9 +310,9 @@ const testDatabaseConnection = () => {
             <div class="mb-3">
               <label for="backupFileName" class="form-label">File Name</label>
               <input
-                id="backupFileName"
                 type="text"
                 class="form-control"
+                id="backupFileName"
                 v-model="form.file_name"
                 @blur="touched.file_name = true"
                 :class="{ 'is-invalid': errors.file_name && touched.file_name }"
@@ -278,8 +326,8 @@ const testDatabaseConnection = () => {
             <div class="mb-3">
               <label for="storageDisk" class="form-label">Storage Disk</label>
               <select
-                id="storageDisk"
                 class="form-select"
+                id="storageDisk"
                 v-model="form.storage_disk"
                 @blur="touched.storage_disk = true"
                 :class="{ 'is-invalid': errors.storage_disk && touched.storage_disk }"
@@ -299,12 +347,13 @@ const testDatabaseConnection = () => {
                 <div class="card-header bg-light">
                   <div class="form-check form-switch">
                     <input type="hidden" name="include_database" :value="0" />
+
                     <input
                       type="checkbox"
                       class="form-check-input"
                       id="includeDatabaseToggle"
                       v-model="form.include_database"
-                    >
+                    />
                     <label class="form-check-label fw-bold" for="includeDatabaseToggle">
                       <i class="ti ti-database me-2"></i>
                       Include Database Backup
@@ -324,7 +373,7 @@ const testDatabaseConnection = () => {
                         id="dbSourceEnv"
                         value="env"
                         v-model="form.db_source"
-                      >
+                      />
                       <label class="form-check-label" for="dbSourceEnv">
                         <strong>Use Project's .env File</strong>
                         <small class="d-block text-muted">Automatically read from project's environment file</small>
@@ -338,7 +387,7 @@ const testDatabaseConnection = () => {
                         id="dbSourceCustom"
                         value="custom"
                         v-model="form.db_source"
-                      >
+                      />
                       <label class="form-check-label" for="dbSourceCustom">
                         <strong>Custom Database Credentials</strong>
                         <small class="d-block text-muted">Specify different database credentials</small>
@@ -346,7 +395,7 @@ const testDatabaseConnection = () => {
                     </div>
                     <div class="alert alert-info mt-2">
                       <i class="ti ti-info-circle me-2"></i>
-                      {{ dbSourceInfo }}
+                      {{ form.db_source === 'env' ? "Will use database credentials from project's .env file" : form.db_source === 'project_config' ? 'Will use database credentials stored in project configuration' : 'Use custom database credentials for this backup' }}
                     </div>
                   </div>
 
@@ -364,7 +413,7 @@ const testDatabaseConnection = () => {
                           placeholder="localhost"
                           @blur="touched.db_host = true"
                           :class="{ 'is-invalid': errors.db_host && touched.db_host }"
-                        >
+                        />
                         <div v-if="errors.db_host && touched.db_host" class="invalid-feedback">
                           {{ errors.db_host }}
                         </div>
@@ -377,7 +426,7 @@ const testDatabaseConnection = () => {
                           id="dbPort"
                           v-model="form.db_port"
                           placeholder="3306"
-                        >
+                        />
                       </div>
                     </div>
                     <div class="row">
@@ -390,7 +439,7 @@ const testDatabaseConnection = () => {
                           v-model="form.db_name"
                           @blur="touched.db_name = true"
                           :class="{ 'is-invalid': errors.db_name && touched.db_name }"
-                        >
+                        />
                         <div v-if="errors.db_name && touched.db_name" class="invalid-feedback">
                           {{ errors.db_name }}
                         </div>
@@ -404,7 +453,7 @@ const testDatabaseConnection = () => {
                           v-model="form.db_username"
                           @blur="touched.db_username = true"
                           :class="{ 'is-invalid': errors.db_username && touched.db_username }"
-                        >
+                        />
                         <div v-if="errors.db_username && touched.db_username" class="invalid-feedback">
                           {{ errors.db_username }}
                         </div>
@@ -419,7 +468,7 @@ const testDatabaseConnection = () => {
                         v-model="form.db_password"
                         @blur="touched.db_password = true"
                         :class="{ 'is-invalid': errors.db_password && touched.db_password }"
-                      >
+                      />
                       <div v-if="errors.db_password && touched.db_password" class="invalid-feedback">
                         {{ errors.db_password }}
                       </div>
@@ -456,7 +505,7 @@ const testDatabaseConnection = () => {
                             id="tablesAll"
                             value="all"
                             v-model="form.db_tables"
-                          >
+                          />
                           <label class="form-check-label" for="tablesAll">
                             All Tables (Complete Database)
                           </label>
@@ -469,7 +518,7 @@ const testDatabaseConnection = () => {
                             id="tablesSelected"
                             value="selected"
                             v-model="form.db_tables"
-                          >
+                          />
                           <label class="form-check-label" for="tablesSelected">
                             Selected Tables Only
                           </label>
@@ -493,28 +542,25 @@ const testDatabaseConnection = () => {
               </div>
             </div>
 
-            <!-- Auto Backup -->
+            <!-- Auto Backup Toggle and Fields -->
             <div class="mb-3">
               <div class="form-check form-switch">
                 <input
-                  id="autoBackupToggle"
                   type="checkbox"
                   class="form-check-input"
+                  id="autoBackupToggle"
                   v-model="autoBackupEnabled"
                   @change="touched.frequency = true; touched.time = true"
                 />
-                <label class="form-check-label" for="autoBackupToggle">
-                  Enable Auto Backups
-                </label>
+                <label class="form-check-label" for="autoBackupToggle">Enable Auto Backups</label>
               </div>
-
               <div v-if="autoBackupEnabled" class="mt-3">
                 <div class="row">
                   <div class="col-md-6 mb-3">
                     <label for="frequency" class="form-label">Frequency</label>
                     <select
-                      id="frequency"
                       class="form-select"
+                      id="frequency"
                       v-model="form.frequency"
                       @blur="touched.frequency = true"
                       :class="{ 'is-invalid': errors.frequency && touched.frequency }"
@@ -527,13 +573,12 @@ const testDatabaseConnection = () => {
                       {{ errors.frequency }}
                     </div>
                   </div>
-
                   <div class="col-md-6 mb-3">
                     <label for="backupTime" class="form-label">Backup Time</label>
                     <input
-                      id="backupTime"
                       type="time"
                       class="form-control"
+                      id="backupTime"
                       v-model="form.time"
                       @blur="touched.time = true"
                       :class="{ 'is-invalid': errors.time && touched.time }"
@@ -546,17 +591,12 @@ const testDatabaseConnection = () => {
               </div>
             </div>
 
-            <!-- Buttons -->
             <div class="d-flex gap-2">
               <button type="submit" class="btn btn-primary" :disabled="form.processing">
                 <i class="ti ti-device-floppy me-1"></i>
                 {{ form.processing ? 'Updating...' : 'Update Backup' }}
               </button>
-              <button
-                type="button"
-                class="btn btn-secondary"
-                @click="router.visit('/backups/manage-backups')"
-              >
+              <button type="button" class="btn btn-secondary" @click="router.visit('/backups/manage-backups')">
                 <i class="ti ti-x me-1"></i>
                 Cancel
               </button>
@@ -572,21 +612,30 @@ const testDatabaseConnection = () => {
 .is-invalid {
   border-color: #dc3545;
 }
+
 .invalid-feedback {
   color: #dc3545;
   font-size: 0.875rem;
 }
+
 .form-text {
   color: #6c757d;
   font-size: 0.875rem;
 }
+
 .card-header {
-  border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+  border-bottom: 1px solid rgba(0,0,0,.125);
 }
+
 .form-check-label strong {
   color: #333;
 }
+
 .btn-link {
   font-size: 0.9rem;
+}
+
+.text-danger {
+  font-size: 0.85rem;
 }
 </style>
