@@ -55,6 +55,8 @@ Route::middleware('auth')->group(function () {
 
     Route::prefix('/settings')->group(function () {
         Route::get('/', [SettingsController::class, 'index'])->name('settings');
+        Route::get('/settings', [SettingsController::class, 'getSettings']);
         Route::post('/{type}', [SettingsController::class, 'update']);
     });
+
 });

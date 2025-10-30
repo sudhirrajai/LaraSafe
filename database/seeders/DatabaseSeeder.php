@@ -3,7 +3,6 @@
 namespace Database\Seeders;
 
 use App\Models\User;
-// use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Str;
 
@@ -14,14 +13,18 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // User::factory(10)->create();
-
+        // Create default user
         User::factory()->create([
-               'id' => (string) Str::uuid(),
-                'name' => 'LaraSafe',
-                'email' => 'sudhirrajai@proton.me',
-                'email_verified_at' => now(),
-                'password' => bcrypt('12345678'),
+            'id' => (string) Str::uuid(),
+            'name' => 'LaraSafe',
+            'email' => 'sudhirrajai@proton.me',
+            'email_verified_at' => now(),
+            'password' => bcrypt('12345678'),
+        ]);
+
+        // Seed cloud settings
+        $this->call([
+            CloudSettingsSeeder::class,
         ]);
     }
 }
