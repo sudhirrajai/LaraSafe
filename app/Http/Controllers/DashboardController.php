@@ -31,6 +31,9 @@ class DashboardController extends Controller
         
         // Get backup success rate over time (last 30 days)
         $backupTrends = $this->getBackupTrends();
+        
+        // Get server storage information
+        $serverStorage = $this->getServerStorage();
 
         return Inertia::render('Home', [
             'stats' => $stats,
@@ -39,6 +42,7 @@ class DashboardController extends Controller
             'projectStats' => $projectStats,
             'storageUsage' => $storageUsage,
             'backupTrends' => $backupTrends,
+            'serverStorage' => $serverStorage,
         ]);
     }
 
@@ -177,5 +181,148 @@ class DashboardController extends Controller
             'successful' => $successful,
             'failed' => $failed,
         ];
+    }
+    
+    private function getServerStorage()
+    {
+        // Get the storage path where backups are stored
+        // You can customize this to your backup storage location
+        $backupPath = storage_path('app/backups');
+        
+        // Create directory if it doesn't exist
+        if (!file_exists($backupPath)) {
+            mkdir($backupPath, 0755, true);
+        }
+        
+        // Get disk information
+        $totalSpace = disk_total_space($backupPath);
+        $freeSpace = disk_free_space($backupPath);
+        $usedSpace = $totalSpace - $freeSpace;
+        
+        // Get space used by Larasafe backups
+        $larasafeUsed = CreatedBackup::sum('size') ?? 0;
+        
+        // Calculate percentages
+        $usedPercentage = $totalSpace > 0 ? round(($usedSpace / $totalSpace) * 100, 1) : 0;
+        $larasafePercentage = $totalSpace > 0 ? round(($larasafeUsed / $totalSpace) * 100, 1) : 0;
+        $availablePercentage = 100 - $usedPercentage;
+        
+        // Get RAM information
+        $ramInfo = $this->getRAMInfo();
+        
+        return [
+            'total' => $totalSpace,
+            'used' => $usedSpace,
+            'free' => $freeSpace,
+            'larasafe_used' => $larasafeUsed,
+            'used_percentage' => $usedPercentage,
+            'available_percentage' => $availablePercentage,
+            'larasafe_percentage' => $larasafePercentage,
+            'ram' => $ramInfo,
+        ];
+    }
+    
+    private function getRAMInfo()
+    {
+        $ramInfo = [
+            'total' => 0,
+            'used' => 0,
+            'free' => 0,
+            'used_percentage' => 0,
+            'free_percentage' => 0,
+            'larasafe_used' => 0,
+            'larasafe_percentage' => 0,
+        ];
+        
+        // Check if we're on a Linux system
+        if (PHP_OS_FAMILY === 'Linux' && file_exists('/proc/meminfo')) {
+            $meminfo = file_get_contents('/proc/meminfo');
+            
+            // Parse meminfo
+            preg_match('/MemTotal:\s+(\d+)\s+kB/', $meminfo, $totalMatch);
+            preg_match('/MemAvailable:\s+(\d+)\s+kB/', $meminfo, $availableMatch);
+            
+            if (!empty($totalMatch[1])) {
+                $totalKB = (int)$totalMatch[1];
+                $availableKB = !empty($availableMatch[1]) ? (int)$availableMatch[1] : 0;
+                
+                // Convert KB to bytes
+                $ramInfo['total'] = $totalKB * 1024;
+                $ramInfo['free'] = $availableKB * 1024;
+                $ramInfo['used'] = $ramInfo['total'] - $ramInfo['free'];
+                
+                // Get current PHP process memory usage (Larasafe)
+                $ramInfo['larasafe_used'] = memory_get_usage(true);
+                
+                // Calculate percentages
+                if ($ramInfo['total'] > 0) {
+                    $ramInfo['used_percentage'] = round(($ramInfo['used'] / $ramInfo['total']) * 100, 1);
+                    $ramInfo['free_percentage'] = round(($ramInfo['free'] / $ramInfo['total']) * 100, 1);
+                    $ramInfo['larasafe_percentage'] = round(($ramInfo['larasafe_used'] / $ramInfo['total']) * 100, 2);
+                }
+            }
+        } 
+        // Check if we're on Windows
+        elseif (PHP_OS_FAMILY === 'Windows') {
+            // Use wmic command to get memory info
+            $output = shell_exec('wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /Value');
+            
+            if ($output) {
+                preg_match('/FreePhysicalMemory=(\d+)/', $output, $freeMatch);
+                preg_match('/TotalVisibleMemorySize=(\d+)/', $output, $totalMatch);
+                
+                if (!empty($totalMatch[1])) {
+                    $totalKB = (int)$totalMatch[1];
+                    $freeKB = !empty($freeMatch[1]) ? (int)$freeMatch[1] : 0;
+                    
+                    // Convert KB to bytes
+                    $ramInfo['total'] = $totalKB * 1024;
+                    $ramInfo['free'] = $freeKB * 1024;
+                    $ramInfo['used'] = $ramInfo['total'] - $ramInfo['free'];
+                    
+                    // Get current PHP process memory usage (Larasafe)
+                    $ramInfo['larasafe_used'] = memory_get_usage(true);
+                    
+                    // Calculate percentages
+                    if ($ramInfo['total'] > 0) {
+                        $ramInfo['used_percentage'] = round(($ramInfo['used'] / $ramInfo['total']) * 100, 1);
+                        $ramInfo['free_percentage'] = round(($ramInfo['free'] / $ramInfo['total']) * 100, 1);
+                        $ramInfo['larasafe_percentage'] = round(($ramInfo['larasafe_used'] / $ramInfo['total']) * 100, 2);
+                    }
+                }
+            }
+        }
+        // Fallback: Use PHP memory limit as approximation
+        else {
+            $memoryLimit = ini_get('memory_limit');
+            if ($memoryLimit != '-1') {
+                $ramInfo['larasafe_used'] = memory_get_usage(true);
+                // Note: This is just PHP memory limit, not actual system RAM
+                $ramInfo['total'] = $this->convertToBytes($memoryLimit);
+            }
+        }
+        
+        return $ramInfo;
+    }
+    
+    private function convertToBytes($value)
+    {
+        $value = trim($value);
+        $last = strtolower($value[strlen($value) - 1]);
+        $value = (int)$value;
+        
+        switch ($last) {
+            case 'g':
+                $value *= 1024 * 1024 * 1024;
+                break;
+            case 'm':
+                $value *= 1024 * 1024;
+                break;
+            case 'k':
+                $value *= 1024;
+                break;
+        }
+        
+        return $value;
     }
 }

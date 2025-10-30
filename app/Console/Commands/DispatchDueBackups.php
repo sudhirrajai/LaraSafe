@@ -15,12 +15,16 @@ class DispatchDueBackups extends Command
     public function handle(): int
     {
         $today = Carbon::today();
-        $backups = Backup::where('backup_frequency', '!=', null)->whereDate('next_backup_date', '<=', $today)->get();
+
+        // Use correct column name: next_backup_at
+        $backups = Backup::whereNotNull('backup_frequency')
+            ->whereDate('next_backup_at', '<=', $today)
+            ->get();
 
         foreach ($backups as $backup) {
             BackupProjectJob::dispatch($backup);
 
-            // calculate the next date
+            // Calculate the next backup time
             $next = match ($backup->backup_frequency) {
                 'daily' => $today->copy()->addDay(),
                 'weekly' => $today->copy()->addWeek(),
@@ -28,7 +32,8 @@ class DispatchDueBackups extends Command
                 default => $today->copy()->addDay(),
             };
 
-            $backup->update(['next_backup_date' => $next]);
+            // Update correct column name
+            $backup->update(['next_backup_at' => $next]);
 
             $this->info("Backup job dispatched for {$backup->project->name}");
         }

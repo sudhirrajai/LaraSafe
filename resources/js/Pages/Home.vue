@@ -14,6 +14,7 @@ const props = defineProps({
     projectStats: Array,
     storageUsage: Array,
     backupTrends: Object,
+    serverStorage: Object,
 })
 
 // Format bytes to human readable
@@ -61,9 +62,226 @@ const getTimeUntil = (dateStr) => {
     if (days > 0) return `${days}d ${hours % 24}h`
     return `${hours}h`
 }
+
+// Get storage status color
+const getStorageStatusColor = (percentage) => {
+    if (percentage >= 90) return 'danger'
+    if (percentage >= 75) return 'warning'
+    return 'success'
+}
 </script>
 
 <template>
+    <!-- Server Storage Card (Full Width) -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body p-4">
+                    <div class="row align-items-center">
+                        <div class="col-lg-3 col-md-6 mb-3 mb-lg-0">
+                            <h5 class="card-title fw-semibold mb-1">Server Storage</h5>
+                            <p class="text-muted mb-0 fs-3">Total available space</p>
+                        </div>
+                        <div class="col-lg-9 col-md-6">
+                            <div class="row g-3">
+                                <div class="col-md-3">
+                                    <div class="d-flex align-items-center">
+                                        <div
+                                            class="me-3 rounded-circle bg-light-primary p-3 d-flex align-items-center justify-content-center">
+                                            <i class="ti ti-database text-primary fs-5"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-muted mb-0 fs-3">Total Space</p>
+                                            <h6 class="fw-semibold mb-0">{{ formatBytes(serverStorage.total) }}</h6>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="d-flex align-items-center">
+                                        <div
+                                            :class="`me-3 rounded-circle bg-light-${getStorageStatusColor(serverStorage.used_percentage)} p-3 d-flex align-items-center justify-content-center`">
+                                            <i :class="`ti ti-disc text-${getStorageStatusColor(serverStorage.used_percentage)} fs-5`"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-muted mb-0 fs-3">Used Space</p>
+                                            <h6 class="fw-semibold mb-0">{{ formatBytes(serverStorage.used) }}</h6>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="d-flex align-items-center">
+                                        <div
+                                            class="me-3 rounded-circle bg-light-success p-3 d-flex align-items-center justify-content-center">
+                                            <i class="ti ti-circle-check text-success fs-5"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-muted mb-0 fs-3">Available</p>
+                                            <h6 class="fw-semibold mb-0">{{ formatBytes(serverStorage.free) }}</h6>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="d-flex align-items-center">
+                                        <div
+                                            class="me-3 rounded-circle bg-light-info p-3 d-flex align-items-center justify-content-center">
+                                            <i class="ti ti-package text-info fs-5"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-muted mb-0 fs-3">Larasafe</p>
+                                            <h6 class="fw-semibold mb-0">{{ formatBytes(serverStorage.larasafe_used) }}
+                                            </h6>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <span class="fs-3 text-muted">Storage Usage</span>
+                                    <span class="fs-3 fw-semibold">{{ serverStorage.used_percentage }}% used</span>
+                                </div>
+                                <div class="progress" style="height: 10px;">
+                                    <div class="progress-bar bg-info" role="progressbar"
+                                        :style="`width: ${serverStorage.larasafe_percentage}%`"
+                                        :aria-valuenow="serverStorage.larasafe_percentage" aria-valuemin="0"
+                                        aria-valuemax="100" :title="`Larasafe: ${serverStorage.larasafe_percentage}%`">
+                                    </div>
+                                    <div :class="`progress-bar bg-${getStorageStatusColor(serverStorage.used_percentage)}`"
+                                        role="progressbar"
+                                        :style="`width: ${serverStorage.used_percentage - serverStorage.larasafe_percentage}%`"
+                                        :aria-valuenow="serverStorage.used_percentage - serverStorage.larasafe_percentage"
+                                        aria-valuemin="0" aria-valuemax="100"
+                                        :title="`Other: ${serverStorage.used_percentage - serverStorage.larasafe_percentage}%`">
+                                    </div>
+                                </div>
+                                <div class="d-flex gap-3 mt-2">
+                                    <small class="text-muted">
+                                        <span class="badge bg-info me-1"></span>
+                                        Larasafe ({{ parseFloat(serverStorage.larasafe_percentage).toFixed(1) }}%)
+                                    </small>
+                                    <small class="text-muted">
+                                        <span
+                                            :class="`badge bg-${getStorageStatusColor(serverStorage.used_percentage)} me-1`"></span>
+                                        Other ({{ (serverStorage.used_percentage - serverStorage.larasafe_percentage).toFixed(1) }}%)
+                                    </small>
+                                    <small class="text-muted">
+                                        <span class="badge bg-light-secondary me-1"></span>
+                                        Free ({{ parseFloat(serverStorage.available_percentage).toFixed(1) }}%)
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+        <!-- Server Ram Card (Full Width) -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body p-4">
+                    <div class="row align-items-center">
+                        <div class="col-lg-3 col-md-6 mb-3 mb-lg-0">
+                            <h5 class="card-title fw-semibold mb-1">Server Ram</h5>
+                            <p class="text-muted mb-0 fs-3">Total available Ram</p>
+                        </div>
+                        <div class="col-lg-9 col-md-6">
+                            <div class="row g-3">
+                                <div class="col-md-3">
+                                    <div class="d-flex align-items-center">
+                                        <div
+                                            class="me-3 rounded-circle bg-light-primary p-3 d-flex align-items-center justify-content-center">
+                                            <i class="ti ti-database text-primary fs-5"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-muted mb-0 fs-3">Total Ram</p>
+                                            <h6 class="fw-semibold mb-0">{{ formatBytes(serverStorage.ram.total) }}</h6>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="d-flex align-items-center">
+                                        <div
+                                            :class="`me-3 rounded-circle bg-light-${getStorageStatusColor(serverStorage.used_percentage)} p-3 d-flex align-items-center justify-content-center`">
+                                            <i :class="`ti ti-disc text-${getStorageStatusColor(serverStorage.used_percentage)} fs-5`"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-muted mb-0 fs-3">Used Ram</p>
+                                            <h6 class="fw-semibold mb-0">{{ formatBytes(serverStorage.ram.used) }}</h6>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="d-flex align-items-center">
+                                        <div
+                                            class="me-3 rounded-circle bg-light-success p-3 d-flex align-items-center justify-content-center">
+                                            <i class="ti ti-circle-check text-success fs-5"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-muted mb-0 fs-3">Available Ram</p>
+                                            <h6 class="fw-semibold mb-0">{{ formatBytes(serverStorage.ram.free) }}</h6>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="d-flex align-items-center">
+                                        <div
+                                            class="me-3 rounded-circle bg-light-info p-3 d-flex align-items-center justify-content-center">
+                                            <i class="ti ti-package text-info fs-5"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-muted mb-0 fs-3">Larasafe</p>
+                                            <h6 class="fw-semibold mb-0">{{ formatBytes(serverStorage.ram.larasafe_used) }}
+                                            </h6>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <span class="fs-3 text-muted">Ram Usage</span>
+                                    <span class="fs-3 fw-semibold">{{ serverStorage.ram.used_percentage }}% used</span>
+                                </div>
+                                <div class="progress" style="height: 10px;">
+                                    <div class="progress-bar bg-info" role="progressbar"
+                                        :style="`width: ${serverStorage.ram.used_percentage}%`"
+                                        :aria-valuenow="serverStorage.ram.used_percentage" aria-valuemin="0"
+                                        aria-valuemax="100" :title="`Larasafe: ${serverStorage.ram.used_percentage}%`">
+                                    </div>
+                                    <div :class="`progress-bar bg-${getStorageStatusColor(serverStorage.ram.used_percentage)}`"
+                                        role="progressbar"
+                                        :style="`width: ${serverStorage.ram.used_percentage}%`"
+                                        :aria-valuenow="serverStorage.ram.used_percentage"
+                                        aria-valuemin="0" aria-valuemax="100"
+                                        :title="`Other: ${serverStorage.ram.used_percentage}%`">
+                                    </div>
+                                </div>
+                                <div class="d-flex gap-3 mt-2">
+                                    <small class="text-muted">
+                                        <span class="badge bg-info me-1"></span>
+                                        Larasafe ({{ parseFloat(serverStorage.ram.larasafe_percentage).toFixed(1) }}%)
+                                    </small>
+                                    <small class="text-muted">
+                                        <span
+                                            :class="`badge bg-${getStorageStatusColor(serverStorage.ram.used_percentage)} me-1`"></span>
+                                        Other ({{ (serverStorage.ram.used_percentage).toFixed(1) }}%)
+                                    </small>
+                                    <small class="text-muted">
+                                        <span class="badge bg-light-secondary me-1"></span>
+                                        Free ({{ parseFloat(serverStorage.ram.free_percentage).toFixed(1) }}%)
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Stats Cards Row -->
     <div class="row">
         <div class="col-lg-3 col-md-6">
