@@ -9,22 +9,18 @@ return new class extends Migration
     /**
      * Run the migrations.
      */
-    public function up(): void
+    public function up()
     {
-        Schema::create('storage_settings', function (Blueprint $table) {
-            $table->id();
-            $table->string('provider')->index(); // e.g., 's3', 'backblaze', 'wasabi'
-            $table->json('config')->nullable(); // JSON to store provider-specific settings
-            $table->boolean('is_active')->default(true); // Toggle for active/inactive settings
+        Schema::create('cloud_settings', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+            $table->string('type')->unique(); // s3, b2, wasabi
+            $table->json('config'); // Store the settings as JSON
             $table->timestamps();
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
-    public function down(): void
+    public function down()
     {
-        Schema::dropIfExists('storage_settings');
+        Schema::dropIfExists('cloud_settings');
     }
 };
