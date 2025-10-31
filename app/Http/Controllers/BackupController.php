@@ -132,6 +132,8 @@ class BackupController extends Controller
         // Mail::to($backup->project->user->email ?? 'sudhirrajai@proton.me')
         //     ->send(new \App\Mail\BackupStatusMail($backup));
 
+        \Spatie\ResponseCache\Facades\ResponseCache::clear();
+
         return back()->with('status', 'Backup created successfully!');
     }
 
@@ -525,6 +527,8 @@ class BackupController extends Controller
             \Log::info("Error sending backup update email: " . $e->getMessage());
         }
 
+        \Spatie\ResponseCache\Facades\ResponseCache::clear();
+
         return redirect()
             ->route('manage-backups')
             ->with('status', 'Backup updated successfully!');
@@ -630,6 +634,7 @@ class BackupController extends Controller
                     'message' => $message
                 ]);
             }
+            \Spatie\ResponseCache\Facades\ResponseCache::clear();
 
             return redirect()->back()->with('success', $message);
         } catch (\Exception $e) {
