@@ -35,6 +35,8 @@ class DashboardController extends Controller
         // Get server storage information
         $serverStorage = $this->getServerStorage();
 
+        \Spatie\ResponseCache\Facades\ResponseCache::clear();
+
         return Inertia::render('Home', [
             'stats' => $stats,
             'recentBackups' => $recentBackups,
