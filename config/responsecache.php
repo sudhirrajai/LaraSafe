@@ -91,4 +91,12 @@ return [
      * This class is responsible for serializing responses.
      */
     'serializer' => \Spatie\ResponseCache\Serializers\DefaultSerializer::class,
+
+    'dont_cache' => [
+        fn (Illuminate\Http\Request $request) => $request->header('X-Inertia'),
+        fn (Illuminate\Http\Request $request) => !$request->isMethod('GET'),
+        fn (Illuminate\Http\Request $request) => $request->is('dashboard'),
+        fn (Illuminate\Http\Request $request) => $request->is('backups/*'),
+        fn (Illuminate\Http\Request $request) => $request->is('projects/*'),
+    ],
 ];
