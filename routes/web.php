@@ -8,7 +8,6 @@ use App\Http\Controllers\BackupController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\SettingsController;
-use Spatie\ResponseCache\Middlewares\CacheResponse;
 
 // Route::get('/login', [DashboardController::class, 'index'])->name('login');
 
@@ -17,7 +16,7 @@ Route::middleware('guest')->group(function () {
     Route::post('login', [AuthController::class, 'login'])->name('login.post');
 });
 
-Route::middleware(['auth', CacheResponse::class])->group(function () {
+Route::middleware(['auth'])->group(function () {
     Route::post('logout', [AuthController::class, 'logout'])->name('logout');
 
     Route::prefix('profile')->group(function () {

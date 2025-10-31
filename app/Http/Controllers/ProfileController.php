@@ -36,8 +36,6 @@ class ProfileController extends Controller
         $user->avatar = $path;
         $user->save();
 
-        \Spatie\ResponseCache\Facades\ResponseCache::clear();
-
         return back()->with('success', 'Avatar updated successfully!');
     }
 
@@ -55,8 +53,6 @@ class ProfileController extends Controller
             'email' => $validated['email'],
         ]);
 
-        \Spatie\ResponseCache\Facades\ResponseCache::clear();
-
         return back()->with('success', 'Profile updated successfully!');
     }
 
@@ -70,8 +66,6 @@ class ProfileController extends Controller
         auth()->user()->update([
             'password' => Hash::make($validated['password']),
         ]);
-
-        \Spatie\ResponseCache\Facades\ResponseCache::clear();
 
         return back()->with('success', 'Password changed successfully!');
     }
