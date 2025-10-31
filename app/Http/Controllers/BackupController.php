@@ -392,15 +392,31 @@ class BackupController extends Controller
         if (!empty($backup->database_config)) {
             $dbConfig = $backup->database_config;
 
-            if (isset($dbConfig['credentials'])) {
+            if (!empty($dbConfig['credentials']) && is_string($dbConfig['credentials'])) {
                 try {
+                    // Attempt to decrypt
                     $decrypted = decrypt($dbConfig['credentials']);
-                    $dbConfig['credentials'] = json_decode($decrypted, true);
-                } catch (\Exception $e) {
-                    \Log::warning("Failed to decrypt backup credentials for backup ID {$id}");
+
+                    // Validate JSON structure after decrypting
+                    $decoded = json_decode($decrypted, true);
+
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                        $dbConfig['credentials'] = $decoded;
+                    } else {
+                        \Log::warning("Invalid JSON format in decrypted credentials for backup ID {$id}");
+                        $dbConfig['credentials'] = null;
+                    }
+                } catch (\Illuminate\Contracts\Encryption\DecryptException $e) {
+                    \Log::warning("Decryption failed for backup ID {$id}: " . $e->getMessage());
+                    $dbConfig['credentials'] = null;
+                } catch (\Throwable $e) {
+                    \Log::error("Unexpected error while decrypting credentials for backup ID {$id}: " . $e->getMessage());
                     $dbConfig['credentials'] = null;
                 }
+            } else {
+                $dbConfig['credentials'] = null;
             }
+
 
             // Reassign the modified config back to the model
             $backup->database_config = $dbConfig;
