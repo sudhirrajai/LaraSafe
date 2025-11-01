@@ -32,6 +32,8 @@ class Backup extends Model
 
     protected $casts = [
         'last_backup_at' => 'datetime',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
         'next_backup_at' => 'datetime',
         'include_database' => 'boolean',
         'database_config'  => 'array',

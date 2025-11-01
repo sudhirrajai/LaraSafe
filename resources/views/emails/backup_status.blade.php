@@ -115,7 +115,7 @@
                     </tr>
                     <tr>
                         <th>Created At</th>
-                        <td>{{ $backup->created_at->format('d-m-Y H:i') }}</td>
+                        <td>{{ $backup->created_at }}</td>
                     </tr>
                 </table>
                 @if($backup->status === 'success')
