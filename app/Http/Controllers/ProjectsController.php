@@ -36,6 +36,8 @@ class ProjectsController extends Controller
 
         $project = Project::create($validation);
 
+        \Spatie\ResponseCache\Facades\ResponseCache::clear();
+
         return redirect()->route('manage-projects')->with('success', 'Project created successfully');
     }
 
@@ -59,6 +61,8 @@ class ProjectsController extends Controller
         ]);
 
         $project->update($validation);
+
+        \Spatie\ResponseCache\Facades\ResponseCache::clear();
 
         return redirect()->route('manage-projects')->with('success', 'Project updated successfully');
     }
@@ -177,6 +181,8 @@ class ProjectsController extends Controller
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
+
+            \Spatie\ResponseCache\Facades\ResponseCache::clear();
 
             return redirect()->route('manage-projects')
                 ->with('error', 'Failed to delete project. Please check the logs for details.');
