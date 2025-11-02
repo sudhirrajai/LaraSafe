@@ -1,6 +1,7 @@
 <script setup>
 import MainLayout from '@/Layouts/MainLayout.vue'
 import { Link, useForm } from '@inertiajs/vue3'
+import { ref, computed } from 'vue'
 
 defineOptions({
   layout: MainLayout
@@ -9,7 +10,8 @@ defineOptions({
 const props = defineProps({
   user: { type: Object, required: true },
   roles: { type: Array, default: () => [] },
-  allPermissions: { type: Object, default: () => ({}) }
+  allPermissions: { type: Object, default: () => ({}) },
+  currentUserRole: { type: String, default: null }
 })
 
 const form = useForm({
@@ -20,11 +22,23 @@ const form = useForm({
   password_confirmation: '',
 })
 
+const showPassword = ref(false)
+const showPasswordConfirmation = ref(false)
+
 const roleDescriptions = {
   admin: 'Full access to all features including user management, projects, and backups',
   manager: 'Can manage users, create/edit projects and backups, but cannot delete projects',
   user: 'Can create and download backups, view projects',
   viewer: 'Read-only access - can only view and download'
+}
+
+// Check if role is disabled for current user
+const isRoleDisabled = (roleName) => {
+  if (props.currentUserRole === 'admin') return false
+  if (props.currentUserRole === 'manager') {
+    return ['admin', 'manager'].includes(roleName)
+  }
+  return true
 }
 
 const submit = () => {
@@ -75,6 +89,14 @@ const submit = () => {
                 </div>
               </div>
 
+              <!-- Manager Restriction Warning -->
+              <div v-if="currentUserRole === 'manager'" class="col-12 mb-3">
+                <div class="alert alert-warning">
+                  <i class="ti ti-alert-triangle me-2"></i>
+                  <strong>Manager Restriction:</strong> You can only assign 'User' or 'Viewer' roles.
+                </div>
+              </div>
+
               <!-- Name -->
               <div class="col-md-6 mb-3">
                 <label for="name" class="form-label">Name <span class="text-danger">*</span></label>
@@ -101,16 +123,47 @@ const submit = () => {
                   <!-- New Password -->
                   <div class="col-md-6 mb-3">
                     <label for="password" class="form-label">New Password</label>
-                    <input type="password" class="form-control" :class="{ 'is-invalid': form.errors.password }"
-                           id="password" v-model="form.password" placeholder="Leave blank to keep current">
-                    <div v-if="form.errors.password" class="invalid-feedback">{{ form.errors.password }}</div>
+                    <div class="input-group">
+                      <input 
+                        :type="showPassword ? 'text' : 'password'" 
+                        class="form-control" 
+                        :class="{ 'is-invalid': form.errors.password }"
+                        id="password" 
+                        v-model="form.password" 
+                        placeholder="Leave blank to keep current"
+                      >
+                      <button 
+                        class="btn btn-outline-secondary" 
+                        type="button"
+                        @click="showPassword = !showPassword"
+                      >
+                        <i :class="showPassword ? 'ti ti-eye-off' : 'ti ti-eye'"></i>
+                      </button>
+                    </div>
+                    <div v-if="form.errors.password" class="text-danger small mt-1">
+                      {{ form.errors.password }}
+                    </div>
                   </div>
 
                   <!-- Confirm Password -->
                   <div class="col-md-6 mb-3">
                     <label for="password_confirmation" class="form-label">Confirm New Password</label>
-                    <input type="password" class="form-control" id="password_confirmation"
-                           v-model="form.password_confirmation" placeholder="Confirm password">
+                    <div class="input-group">
+                      <input 
+                        :type="showPasswordConfirmation ? 'text' : 'password'" 
+                        class="form-control" 
+                        id="password_confirmation"
+                        v-model="form.password_confirmation" 
+                        placeholder="Confirm password"
+                      >
+                      <button 
+                        class="btn btn-outline-secondary" 
+                        type="button"
+                        @click="showPasswordConfirmation = !showPasswordConfirmation"
+                      >
+                        <i :class="showPasswordConfirmation ? 'ti ti-eye-off' : 'ti ti-eye'"></i>
+                      </button>
+                    </div>
                   </div>
 
                 </div>
@@ -126,11 +179,23 @@ const submit = () => {
                 <label class="form-label">Assign Role <span class="text-danger">*</span></label>
                 <div class="row">
                   <div v-for="role in roles" :key="role.id" class="col-md-6 mb-3">
-                    <div class="card h-100" :class="{ 'border-primary': form.role === role.name }">
+                    <div 
+                      class="card h-100" 
+                      :class="{ 
+                        'border-primary': form.role === role.name,
+                        'opacity-50': isRoleDisabled(role.name)
+                      }"
+                    >
                       <div class="card-body p-3">
                         <div class="form-check">
-                          <input type="radio" class="form-check-input" :id="`role-${role.id}`"
-                                 :value="role.name" v-model="form.role">
+                          <input 
+                            type="radio" 
+                            class="form-check-input" 
+                            :id="`role-${role.id}`"
+                            :value="role.name" 
+                            v-model="form.role"
+                            :disabled="isRoleDisabled(role.name)"
+                          >
                           <label class="form-check-label w-100" :for="`role-${role.id}`">
                             <div class="d-flex justify-content-between align-items-center mb-1">
                               <strong class="text-capitalize">{{ role.name }}</strong>
@@ -145,6 +210,9 @@ const submit = () => {
                             </div>
                             <small class="text-muted d-block">
                               {{ roleDescriptions[role.name] || 'Custom role' }}
+                            </small>
+                            <small v-if="isRoleDisabled(role.name)" class="text-danger d-block mt-1">
+                              <i class="ti ti-lock"></i> You cannot assign this role
                             </small>
                           </label>
                         </div>
