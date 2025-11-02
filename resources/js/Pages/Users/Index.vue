@@ -1,21 +1,34 @@
 <script setup>
 import MainLayout from '@/Layouts/MainLayout.vue'
-import { Link, router } from '@inertiajs/vue3'
-import { ref } from 'vue'
-import Swal from 'sweetalert2'   // <-- Import properly
+import { Link, router, usePage } from '@inertiajs/vue3'
+import { ref, computed } from 'vue'
+import Swal from 'sweetalert2'
 
 defineOptions({
   layout: MainLayout
 })
 
-defineProps({
+const props = defineProps({
   users: {
     type: Array,
     default: () => [],
   }
 })
 
+const page = usePage()
+const currentUserRole = computed(() => page.props.auth?.user?.roles?.[0] || null)
+
 const deleting = ref(null)
+
+// Check if current user can edit/delete a specific user
+const canEditUser = (user) => {
+  if (currentUserRole.value === 'admin') return true
+  if (currentUserRole.value === 'manager') {
+    const userRoles = user.roles?.map(r => r.name) || []
+    return !userRoles.includes('admin') && !userRoles.includes('manager')
+  }
+  return false
+}
 
 const handleDelete = (userId) => {
   Swal.fire({
@@ -51,15 +64,15 @@ const getRoleBadgeClass = (roleName) => {
     manager: 'bg-warning',
     user: 'bg-primary',
     editor: 'bg-info',
+    viewer: 'bg-secondary',
   }
   return map[roleName.toLowerCase()] || 'bg-secondary'
 }
 
-// Helper: Generate avatar URL
 const getAvatarUrl = (avatarPath) => {
   return avatarPath
-    ? `/storage/${avatarPath}`                     // Laravel storage link
-    : '/assets/images/profile/user1.jpg'           // Fallback
+    ? `/storage/${avatarPath}`
+    : '/assets/images/profile/user1.jpg'
 }
 </script>
 
@@ -75,6 +88,12 @@ const getAvatarUrl = (avatarPath) => {
             <Link href="/user-management/create" class="btn btn-primary">
               <i class="ti ti-user-plus me-1"></i> Add New User
             </Link>
+          </div>
+
+          <!-- Info Alert for Managers -->
+          <div v-if="currentUserRole === 'manager'" class="alert alert-info mb-3">
+            <i class="ti ti-info-circle me-2"></i>
+            <strong>Manager View:</strong> You can only manage users with 'User' or 'Viewer' roles. Admin and Manager accounts are hidden or restricted.
           </div>
 
           <!-- Table -->
@@ -99,7 +118,6 @@ const getAvatarUrl = (avatarPath) => {
                   <!-- Name + Avatar -->
                   <td>
                     <div class="d-flex align-items-center">
-                      <!-- Avatar -->
                       <div class="me-3">
                         <img
                           :src="getAvatarUrl(user.avatar)"
@@ -132,7 +150,7 @@ const getAvatarUrl = (avatarPath) => {
 
                   <!-- Actions -->
                   <td>
-                    <div class="d-flex gap-1">
+                    <div v-if="canEditUser(user)" class="d-flex gap-1">
                       <Link
                         :href="`/user-management/${user.id}/permissions`"
                         class="btn btn-sm btn-light-info text-info"
@@ -156,6 +174,11 @@ const getAvatarUrl = (avatarPath) => {
                         <i class="ti ti-trash"></i>
                         <span v-if="deleting === user.id" class="spinner-border spinner-border-sm ms-1"></span>
                       </button>
+                    </div>
+                    <div v-else>
+                      <span class="badge bg-light-secondary text-muted">
+                        <i class="ti ti-lock"></i> Restricted
+                      </span>
                     </div>
                   </td>
                 </tr>

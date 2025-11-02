@@ -1,6 +1,6 @@
 <script setup>
 import MainLayout from '@/Layouts/MainLayout.vue'
-import { Link, useForm } from '@inertiajs/vue3'
+import { Link, useForm, usePage } from '@inertiajs/vue3'
 import { ref, computed } from 'vue'
 
 defineOptions({
@@ -19,8 +19,15 @@ const props = defineProps({
     userPermissions: {
         type: Array,
         default: () => [],
+    },
+    currentUserRole: {
+        type: String,
+        default: null
     }
 })
+
+const page = usePage()
+const currentUserRole = computed(() => props.currentUserRole || page.props.auth?.user?.roles?.[0] || null)
 
 const form = useForm({
     permissions: [...props.userPermissions],
@@ -40,8 +47,40 @@ const categoryColors = {
     'Other': 'info'
 }
 
+// Check if a permission should be restricted for managers
+const isPermissionRestricted = (permissionName) => {
+    if (currentUserRole.value === 'admin') return false
+    
+    if (currentUserRole.value === 'manager') {
+        // Managers cannot grant these sensitive permissions
+        const restrictedPermissions = [
+            'manage users',
+            'delete users',
+            'delete project' // Managers can't delete projects themselves, so shouldn't grant it
+        ]
+        return restrictedPermissions.includes(permissionName)
+    }
+    
+    return true // Other roles can't edit permissions at all
+}
+
+// Check if entire category should be restricted
+const isCategoryRestricted = (category) => {
+    if (currentUserRole.value === 'admin') return false
+    
+    if (currentUserRole.value === 'manager') {
+        // User Management category is partially restricted for managers
+        return category === 'User Management'
+    }
+    
+    return true
+}
+
 const toggleCategory = (category) => {
-    const categoryPermissions = props.allPermissions[category].map(p => p.name)
+    const categoryPermissions = props.allPermissions[category]
+        .filter(p => !isPermissionRestricted(p.name))
+        .map(p => p.name)
+    
     const allSelected = categoryPermissions.every(p => form.permissions.includes(p))
     
     if (allSelected) {
@@ -58,12 +97,19 @@ const toggleCategory = (category) => {
 }
 
 const isCategoryFullySelected = (category) => {
-    const categoryPermissions = props.allPermissions[category].map(p => p.name)
+    const categoryPermissions = props.allPermissions[category]
+        .filter(p => !isPermissionRestricted(p.name))
+        .map(p => p.name)
+    
+    if (categoryPermissions.length === 0) return false
     return categoryPermissions.every(p => form.permissions.includes(p))
 }
 
 const isCategoryPartiallySelected = (category) => {
-    const categoryPermissions = props.allPermissions[category].map(p => p.name)
+    const categoryPermissions = props.allPermissions[category]
+        .filter(p => !isPermissionRestricted(p.name))
+        .map(p => p.name)
+    
     const selectedCount = categoryPermissions.filter(p => form.permissions.includes(p)).length
     return selectedCount > 0 && selectedCount < categoryPermissions.length
 }
@@ -75,12 +121,25 @@ const submit = () => {
 }
 
 const selectAll = () => {
-    form.permissions = Object.values(props.allPermissions).flat().map(p => p.name)
+    const allAvailablePermissions = Object.values(props.allPermissions)
+        .flat()
+        .filter(p => !isPermissionRestricted(p.name))
+        .map(p => p.name)
+    
+    form.permissions = [...new Set([...form.permissions, ...allAvailablePermissions])]
 }
 
 const deselectAll = () => {
-    form.permissions = []
+    // Keep restricted permissions if they were already assigned
+    const restrictedPermissions = form.permissions.filter(p => isPermissionRestricted(p))
+    form.permissions = restrictedPermissions
 }
+
+// Check if user being edited is admin or manager
+const isEditingRestrictedUser = computed(() => {
+    const userRoles = props.user.roles?.map(r => r.name) || []
+    return userRoles.includes('admin') || userRoles.includes('manager')
+})
 </script>
 
 <template>
@@ -96,6 +155,17 @@ const deselectAll = () => {
                         <Link :href="`/user-management/${user.id}/edit`" class="btn btn-light-primary text-primary">
                             <i class="ti ti-arrow-left me-1"></i>Back to Edit
                         </Link>
+                    </div>
+
+                    <!-- Restriction Warning for Managers -->
+                    <div v-if="currentUserRole === 'manager' && isEditingRestrictedUser" class="alert alert-danger mb-4">
+                        <i class="ti ti-shield-lock me-2"></i>
+                        <strong>Access Denied:</strong> You cannot edit permissions for admin or manager users.
+                    </div>
+
+                    <div v-else-if="currentUserRole === 'manager'" class="alert alert-warning mb-4">
+                        <i class="ti ti-alert-triangle me-2"></i>
+                        <strong>Manager Restriction:</strong> Some sensitive permissions (like "manage users", "delete users", "delete project") are restricted and cannot be modified.
                     </div>
 
                     <!-- User Info -->
@@ -130,14 +200,14 @@ const deselectAll = () => {
                         </div>
                     </div>
 
-                    <form @submit.prevent="submit">
+                    <form @submit.prevent="submit" v-if="!isEditingRestrictedUser || currentUserRole === 'admin'">
                         <!-- Quick Actions -->
                         <div class="d-flex gap-2 mb-3">
                             <button type="button" @click="selectAll" class="btn btn-sm btn-light-success text-success">
-                                <i class="ti ti-check-all me-1"></i>Select All
+                                <i class="ti ti-check-all me-1"></i>Select All{{ currentUserRole === 'manager' ? ' (Available)' : '' }}
                             </button>
                             <button type="button" @click="deselectAll" class="btn btn-sm btn-light-danger text-danger">
-                                <i class="ti ti-x me-1"></i>Deselect All
+                                <i class="ti ti-x me-1"></i>Deselect All{{ currentUserRole === 'manager' ? ' (Available)' : '' }}
                             </button>
                         </div>
 
@@ -148,12 +218,15 @@ const deselectAll = () => {
                                 :key="category"
                                 class="col-md-6 mb-4"
                             >
-                                <div class="card">
+                                <div class="card" :class="{ 'border-warning': isCategoryRestricted(category) && currentUserRole === 'manager' }">
                                     <div :class="`card-header bg-light-${categoryColors[category]}`">
                                         <div class="d-flex justify-content-between align-items-center">
                                             <h6 class="mb-0">
                                                 <i :class="categoryIcons[category]"></i>
                                                 {{ category }}
+                                                <i v-if="isCategoryRestricted(category) && currentUserRole === 'manager'" 
+                                                   class="ti ti-alert-circle text-warning ms-2" 
+                                                   title="Some permissions in this category are restricted"></i>
                                             </h6>
                                             <button 
                                                 type="button"
@@ -178,6 +251,7 @@ const deselectAll = () => {
                                             v-for="permission in permissions" 
                                             :key="permission.id"
                                             class="form-check mb-2"
+                                            :class="{ 'opacity-50': isPermissionRestricted(permission.name) }"
                                         >
                                             <input 
                                                 type="checkbox" 
@@ -185,9 +259,13 @@ const deselectAll = () => {
                                                 :id="`permission-${permission.id}`"
                                                 :value="permission.name"
                                                 v-model="form.permissions"
+                                                :disabled="isPermissionRestricted(permission.name)"
                                             >
                                             <label class="form-check-label text-capitalize" :for="`permission-${permission.id}`">
                                                 {{ permission.name }}
+                                                <i v-if="isPermissionRestricted(permission.name)" 
+                                                   class="ti ti-lock text-warning ms-1" 
+                                                   title="This permission is restricted"></i>
                                             </label>
                                         </div>
                                     </div>
@@ -225,6 +303,16 @@ const deselectAll = () => {
                             </div>
                         </div>
                     </form>
+
+                    <!-- Message when manager tries to edit admin/manager -->
+                    <div v-else class="text-center py-5">
+                        <i class="ti ti-shield-lock" style="font-size: 4rem; color: #dc3545;"></i>
+                        <h4 class="mt-3">Access Restricted</h4>
+                        <p class="text-muted">You do not have permission to modify this user's permissions.</p>
+                        <Link href="/user-management" class="btn btn-primary mt-3">
+                            <i class="ti ti-arrow-left me-1"></i>Back to User Management
+                        </Link>
+                    </div>
                 </div>
             </div>
         </div>

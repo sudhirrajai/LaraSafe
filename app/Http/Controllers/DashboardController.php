@@ -45,11 +45,6 @@ class DashboardController extends Controller
             'storageUsage' => $storageUsage,
             'backupTrends' => $backupTrends,
             'serverStorage' => $serverStorage,
-            'auth' => [
-            'user' => $user,
-            'roles' => $user->getRoleNames(),
-            'permissions' => $user->getAllPermissions()->pluck('name'),
-        ],
         ]);
     }
 

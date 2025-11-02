@@ -256,37 +256,41 @@ class BackupController extends Controller
                 try {
                     $freedSpace += $createdBackup->size ?? 0;
 
-                    // Try to delete the file
-                    if ($createdBackup->file_path) {
-                        $fullPath = storage_path("app/{$createdBackup->file_path}");
+                    $filePath = $createdBackup->file_path;
+                    $disk = $createdBackup->storage_disk ?? 'local';
+                    $deleted = false;
 
-                        // Try Laravel Storage first
-                        if (Storage::disk($createdBackup->storage_disk)->exists($createdBackup->file_path)) {
-                            if (Storage::disk($createdBackup->storage_disk)->delete($createdBackup->file_path)) {
-                                $deletedFiles++;
-                                \Log::info("Deleted backup file: {$createdBackup->file_name}");
-                            } else {
-                                $failedFiles++;
+                    if ($filePath) {
+                        // Try Laravel Storage
+                        if (Storage::disk($disk)->exists($filePath)) {
+                            $deleted = Storage::disk($disk)->delete($filePath);
+                        }
+
+                        // Fallback: Direct delete
+                        $fullPath = storage_path("app/{$filePath}");
+                        if (!$deleted && file_exists($fullPath)) {
+                            $deleted = @unlink($fullPath);
+                        }
+
+                        // Final: Public link
+                        if (!$deleted) {
+                            $publicPath = public_path("storage/{$filePath}");
+                            if (file_exists($publicPath)) {
+                                $deleted = @unlink($publicPath);
                             }
                         }
-                        // Try direct file system deletion
-                        elseif (file_exists($fullPath)) {
-                            if (unlink($fullPath)) {
-                                $deletedFiles++;
-                                \Log::info("Direct deleted backup file: {$createdBackup->file_name}");
-                            } else {
-                                $failedFiles++;
-                            }
-                        } else {
-                            // File doesn't exist, count as deleted
-                            $deletedFiles++;
-                        }
+                    } else {
+                        $deleted = true;
+                    }
+
+                    if ($deleted) {
+                        $deletedFiles++;
+                    } else {
+                        $failedFiles++;
                     }
                 } catch (\Exception $e) {
                     $failedFiles++;
-                    \Log::error("Error deleting backup file: {$createdBackup->file_name}", [
-                        'error' => $e->getMessage()
-                    ]);
+                    \Log::error("File delete error", ['error' => $e->getMessage()]);
                 }
             }
 
@@ -322,53 +326,80 @@ class BackupController extends Controller
      */
     public function destroyCreatedBackup($id)
     {
-        $createdBackup = CreatedBackup::with('backup.project')->find($id);
-
-        if (!$createdBackup) {
-            return redirect()->back()->with('error', 'Backup file not found');
-        }
+        $createdBackup = CreatedBackup::with(['backup.project'])->findOrFail($id);
 
         try {
             $fileName = $createdBackup->file_name;
             $size = $createdBackup->size ?? 0;
-            $projectName = $createdBackup->backup->project->name;
+            $projectName = $createdBackup->backup->project->name ?? 'Unknown Project';
+            $filePath = $createdBackup->file_path;
+            $storageDisk = $createdBackup->storage_disk ?? 'local';
 
-            // Delete the actual file
             $fileDeleted = false;
-            if ($createdBackup->file_path) {
-                $fullPath = storage_path("app/{$createdBackup->file_path}");
+            $deletedVia = 'none';
 
-                // Try Laravel Storage first
-                if (Storage::disk($createdBackup->storage_disk)->exists($createdBackup->file_path)) {
-                    $fileDeleted = Storage::disk($createdBackup->storage_disk)->delete($createdBackup->file_path);
+            if ($filePath) {
+                // 1. Try Laravel Storage (correct disk)
+                if (Storage::disk($storageDisk)->exists($filePath)) {
+                    if (Storage::disk($storageDisk)->delete($filePath)) {
+                        $fileDeleted = true;
+                        $deletedVia = 'laravel-storage';
+                    }
                 }
-                // Try direct file system deletion
-                elseif (file_exists($fullPath)) {
-                    $fileDeleted = unlink($fullPath);
-                } else {
-                    $fileDeleted = true; // File doesn't exist anyway
+
+                // 2. Fallback: Direct filesystem (most common fix)
+                $fullPath = storage_path("app/{$filePath}");
+                if (!$fileDeleted && file_exists($fullPath)) {
+                    if (unlink($fullPath)) {
+                        $fileDeleted = true;
+                        $deletedVia = 'direct-unlink';
+                    }
                 }
+
+                // 3. Final fallback: Check public/storage link
+                if (!$fileDeleted) {
+                    $publicPath = public_path("storage/{$filePath}");
+                    if (file_exists($publicPath) && unlink($publicPath)) {
+                        $fileDeleted = true;
+                        $deletedVia = 'public-storage';
+                    }
+                }
+            } else {
+                $fileDeleted = true; // No file path = nothing to delete
+                $deletedVia = 'no-path';
             }
 
-            // Delete the database record
+            // Delete DB record
             $createdBackup->delete();
 
-            $message = "Backup file '{$fileName}' deleted successfully";
+            // Log for debugging
+            \Log::info("Backup file deleted", [
+                'id' => $id,
+                'file' => $filePath,
+                'disk' => $storageDisk,
+                'method' => $deletedVia,
+                'size' => $size,
+                'project' => $projectName
+            ]);
+
+            $message = "Backup '{$fileName}' deleted successfully";
             if ($size > 0) {
                 $message .= " (" . $this->formatBytes($size) . " freed)";
             }
             if (!$fileDeleted) {
-                $message .= ". Warning: Physical file could not be removed.";
+                $message .= " (Warning: File may still exist on disk)";
             }
 
             return redirect()->back()->with('success', $message);
+
         } catch (\Exception $e) {
-            \Log::error("Error deleting created backup", [
-                'created_backup_id' => $createdBackup->id,
-                'error' => $e->getMessage()
+            \Log::error("Failed to delete backup file", [
+                'id' => $id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
 
-            return redirect()->back()->with('error', 'Failed to delete backup file.');
+            return redirect()->back()->with('error', 'Failed to delete backup: ' . $e->getMessage());
         }
     }
 

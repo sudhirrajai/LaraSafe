@@ -1,7 +1,7 @@
 <script setup>
 import MainLayout from '@/Layouts/MainLayout.vue'
 import { Link, useForm } from '@inertiajs/vue3'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 
 defineOptions({
     layout: MainLayout
@@ -15,6 +15,10 @@ const props = defineProps({
     allPermissions: {
         type: Object,
         default: () => ({}),
+    },
+    currentUserRole: {
+        type: String,
+        default: null,
     }
 })
 
@@ -23,7 +27,7 @@ const form = useForm({
     email: '',
     password: '',
     password_confirmation: '',
-    role: 'user', // Default role
+    role: 'user',
 })
 
 const showPassword = ref(false)
@@ -34,6 +38,15 @@ const roleDescriptions = {
     manager: 'Can manage users, create/edit projects and backups, but cannot delete projects',
     user: 'Can create and download backups, view projects',
     viewer: 'Read-only access - can only view and download'
+}
+
+// Check if role is disabled for current user
+const isRoleDisabled = (roleName) => {
+    if (props.currentUserRole === 'admin') return false
+    if (props.currentUserRole === 'manager') {
+        return ['admin', 'manager'].includes(roleName)
+    }
+    return true
 }
 
 const submit = () => {
@@ -143,7 +156,13 @@ const submit = () => {
                                 <label class="form-label">Assign Role <span class="text-danger">*</span></label>
                                 <div class="row">
                                     <div v-for="role in roles" :key="role.id" class="col-md-6 mb-3">
-                                        <div class="card" :class="{ 'border-primary': form.role === role.name }">
+                                        <div 
+                                            class="card" 
+                                            :class="{ 
+                                                'border-primary': form.role === role.name,
+                                                'opacity-50': isRoleDisabled(role.name)
+                                            }"
+                                        >
                                             <div class="card-body">
                                                 <div class="form-check">
                                                     <input 
@@ -152,6 +171,7 @@ const submit = () => {
                                                         :id="`role-${role.id}`"
                                                         :value="role.name"
                                                         v-model="form.role"
+                                                        :disabled="isRoleDisabled(role.name)"
                                                     >
                                                     <label class="form-check-label w-100" :for="`role-${role.id}`">
                                                         <div class="d-flex justify-content-between align-items-center">
@@ -170,6 +190,9 @@ const submit = () => {
                                                         <small class="text-muted d-block mt-2">
                                                             {{ roleDescriptions[role.name] || 'Custom role' }}
                                                         </small>
+                                                        <small v-if="isRoleDisabled(role.name)" class="text-danger d-block mt-1">
+                                                            <i class="ti ti-lock"></i> You cannot assign this role
+                                                        </small>
                                                     </label>
                                                 </div>
                                             </div>
@@ -182,6 +205,10 @@ const submit = () => {
                                 <div class="alert alert-info mt-2">
                                     <i class="ti ti-info-circle me-2"></i>
                                     <small>Default permissions will be assigned based on the selected role. You can customize permissions later.</small>
+                                </div>
+                                <div v-if="currentUserRole === 'manager'" class="alert alert-warning mt-2">
+                                    <i class="ti ti-alert-triangle me-2"></i>
+                                    <small><strong>Manager Restriction:</strong> You can only create users with 'User' or 'Viewer' roles.</small>
                                 </div>
                             </div>
 
