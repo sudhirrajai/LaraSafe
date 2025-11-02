@@ -12,6 +12,7 @@
         "laravel/octane": "^2.13",
         "laravel/tinker": "^2.10.1",
         "league/flysystem-aws-s3-v3": "^3.0",
+        "spatie/laravel-permission": "^6.22",
         "symfony/uid": "^7.3",
         "tightenco/ziggy": "^2.6"
     },
