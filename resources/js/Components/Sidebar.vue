@@ -1,30 +1,65 @@
 <script setup>
 import { Link, usePage } from '@inertiajs/vue3'
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 
 const page = usePage()
 const currentUrl = computed(() => page.url)
 const authUser = computed(() => page.props.auth?.user)
+
+// Watch for changes and log (for debugging)
+watch(authUser, (newUser) => {
+    console.log('Auth user updated:', newUser);
+    if (newUser) {
+        console.log('Permissions:', newUser.permissions);
+        console.log('Roles:', newUser.roles);
+    }
+}, { immediate: true })
 
 const isActiveExact = (path) => currentUrl.value === path
 const isActiveStartsWith = (prefix) => currentUrl.value.startsWith(prefix)
 
 // Check if user has permission
 const hasPermission = (permission) => {
-    if (!authUser.value) return false
-    // Check if permissions array exists
-    if (authUser.value.permissions) {
-        return authUser.value.permissions.includes(permission)
+    if (!authUser.value) {
+        console.log('No auth user');
+        return false;
     }
-    // Fallback: check if user has 'can' method (if using Inertia's permission helper)
-    return false
+    if (!authUser.value.permissions) {
+        console.log('No permissions array');
+        return false;
+    }
+    const has = authUser.value.permissions.includes(permission);
+    console.log(`Has permission '${permission}':`, has);
+    return has;
 }
 
 // Check if user has role
 const hasRole = (role) => {
-    if (!authUser.value || !authUser.value.roles) return false
-    return authUser.value.roles.some(r => r.name === role)
+    if (!authUser.value) {
+        console.log('No auth user for role check');
+        return false;
+    }
+    if (!authUser.value.roles) {
+        console.log('No roles array');
+        return false;
+    }
+    
+    // Handle array of role names (strings)
+    if (Array.isArray(authUser.value.roles) && authUser.value.roles.length > 0) {
+        const has = authUser.value.roles.includes(role);
+        console.log(`Has role '${role}':`, has);
+        return has;
+    }
+    
+    return false;
 }
+
+// Computed property for showing user management
+const showUserManagement = computed(() => {
+    const show = hasPermission('manage users') || hasRole('admin') || hasRole('manager');
+    console.log('Show User Management:', show);
+    return show;
+})
 </script>
 
 <template>
@@ -98,7 +133,7 @@ const hasRole = (role) => {
           </li>
 
           <!-- User Management - Only show if user has permission -->
-          <li class="sidebar-item" v-if="hasPermission('manage users') || hasRole('admin')">
+        <li class="sidebar-item" v-if="showUserManagement">
             <Link :href="`/user-management`" :class="[
               'sidebar-link', 'primary-hover-bg', 'justify-content-between',
               { active: isActiveStartsWith('/user-management') }
@@ -110,7 +145,7 @@ const hasRole = (role) => {
                 <span class="hide-menu">User Management</span>
               </div>
             </Link>
-          </li>
+        </li>
         </ul>
       </nav>
     </div>
