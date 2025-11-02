@@ -21,6 +21,8 @@ class BackupProjectJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public $backup;
+    public $timeout = 1800; // 30 minutes
+    public $tries = 2;
 
     public function __construct(Backup $backup)
     {
@@ -191,7 +193,7 @@ class BackupProjectJob implements ShouldQueue
             
             case 'custom':
                 if (isset($dbConfig['credentials'])) {
-                    return decrypt($dbConfig['credentials']);
+                    return json_decode(decrypt($dbConfig['credentials']), true);
                 }
                 break;
             
