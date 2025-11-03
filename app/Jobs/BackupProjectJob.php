@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Backup;
+use App\Services\DynamicStorageService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -24,91 +25,161 @@ class BackupProjectJob implements ShouldQueue
     public $timeout = 1800; // 30 minutes
     public $tries = 2;
 
+    protected $storageService;
+
     public function __construct(Backup $backup)
     {
         $this->backup = $backup;
     }
 
-    public function handle(): void
+    public function handle(DynamicStorageService $storageService): void
     {
-        $user = User::all()->first();
+        $this->storageService = $storageService;
+        
+        $user = User::first();
         $project = $this->backup->project;
         $sourceDir = rtrim($project->path, '/');
         $baseName = pathinfo($this->backup->file_name, PATHINFO_FILENAME);
         $disk = $this->backup->storage_disk ?? 'local';
 
-        // Create folder inside private storage for this project's backups
-        $backupFolder = "private/backups/{$project->name}";
-        Storage::disk($disk)->makeDirectory($backupFolder);
-
-        // Use timestamp to make unique filename
+        // Create timestamp for unique filename
         $timestamp = now()->format('Y_m_d_H_i_s');
         $fileName = $baseName . '_' . $timestamp . '.zip';
         
-        // Store relative path in database for security
-        $relativePath = "{$backupFolder}/{$fileName}";
-        $fullPath = storage_path("app/{$relativePath}");
-
-        // Make sure folder exists
-        $dirPath = dirname($fullPath);
-        if (!is_dir($dirPath)) {
-            mkdir($dirPath, 0755, true);
+        // For local storage, use private folder
+        if ($disk === 'local') {
+            $backupFolder = "private/backups/{$project->name}";
+            $relativePath = "{$backupFolder}/{$fileName}";
+            $fullPath = storage_path("app/{$relativePath}");
+            
+            // Ensure directory exists
+            $dirPath = dirname($fullPath);
+            if (!is_dir($dirPath)) {
+                mkdir($dirPath, 0755, true);
+            }
+        } else {
+            // For cloud storage, create in temp directory first
+            $relativePath = "backups/{$project->name}/{$fileName}";
+            $fullPath = storage_path("app/temp/{$fileName}");
+            
+            // Ensure temp directory exists
+            $tempDir = dirname($fullPath);
+            if (!is_dir($tempDir)) {
+                mkdir($tempDir, 0755, true);
+            }
         }
 
+        // Create the ZIP file
         $zip = new ZipArchive();
         $openResult = $zip->open($fullPath, ZipArchive::CREATE);
 
         if ($openResult === true) {
-            // Add project files
-            $this->addProjectFilesToZip($zip, $sourceDir);
-
-            // Add database backup if enabled
-            if ($this->backup->include_database) {
-                $this->addDatabaseBackupToZip($zip, $project);
-            }
-
-            $zip->close();
-
-            // Generate checksum for integrity verification
-            $checksum = hash_file('sha256', $fullPath);
-
-            // Save in created_backups with correct file path
-            $createdBackup = $this->backup->createdBackups()->create([
-                'file_name' => pathinfo($fileName, PATHINFO_FILENAME),
-                'file_path' => $relativePath,
-                'size' => filesize($fullPath),
-                'storage_disk' => $disk,
-                'checksum' => $checksum,
-                'expires_at' => now()->addDays($this->backup->retention_days ?? 30),
-            ]);
-
-            // Update main backup status
-            $this->backup->update([
-                'status' => 'success',
-                'size' => filesize($fullPath),
-                'last_created_backup_id' => $createdBackup->id,
-                'last_backup_at' => now(),
-            ]);
-
-            Log::info('Backup created successfully', [
-                'backup_id' => $this->backup->id,
-                'file_path' => $relativePath,
-                'size' => filesize($fullPath),
-                'includes_database' => $this->backup->include_database
-            ]);
-
             try {
-                Mail::to($user->email)
-                    ->send(new BackupStatusMail($this->backup, $createdBackup));
-            } catch (Exception $e) {
-                Log::error('Failed to send backup status email', [
-                    'backup_id' => $this->backup->id,
-                    'error' => $e->getMessage(),
+                // Add project files
+                $this->addProjectFilesToZip($zip, $sourceDir);
+
+                // Add database backup if enabled
+                if ($this->backup->include_database) {
+                    $this->addDatabaseBackupToZip($zip, $project);
+                }
+
+                $zip->close();
+
+                // Generate checksum
+                $checksum = hash_file('sha256', $fullPath);
+                $fileSize = filesize($fullPath);
+
+                // Upload to cloud storage if not local
+                $finalPath = $relativePath;
+                if ($disk !== 'local') {
+                    $uploadSuccess = $this->uploadToCloudStorage($disk, $fullPath, $relativePath);
+                    
+                    if (!$uploadSuccess) {
+                        throw new Exception("Failed to upload backup to {$disk}");
+                    }
+                    
+                    // Delete local temp file after successful upload
+                    if (file_exists($fullPath)) {
+                        unlink($fullPath);
+                    }
+                }
+
+                // Save in created_backups table
+                $createdBackup = $this->backup->createdBackups()->create([
+                    'file_name' => pathinfo($fileName, PATHINFO_FILENAME),
+                    'file_path' => $finalPath,
+                    'size' => $fileSize,
+                    'storage_disk' => $disk,
+                    'checksum' => $checksum,
+                    'expires_at' => now()->addDays($this->backup->retention_days ?? 30),
                 ]);
+
+                // Update main backup status
+                $this->backup->update([
+                    'status' => 'success',
+                    'size' => $fileSize,
+                    'last_created_backup_id' => $createdBackup->id,
+                    'last_backup_at' => now(),
+                ]);
+
+                Log::info('Backup created successfully', [
+                    'backup_id' => $this->backup->id,
+                    'file_path' => $finalPath,
+                    'size' => $fileSize,
+                    'storage' => $disk,
+                    'includes_database' => $this->backup->include_database
+                ]);
+
+                // Send email notification
+                try {
+                    Mail::to($user->email)->send(new BackupStatusMail($this->backup, $createdBackup));
+                } catch (Exception $e) {
+                    Log::error('Failed to send backup status email', [
+                        'backup_id' => $this->backup->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+
+            } catch (Exception $e) {
+                $zip->close();
+                
+                // Clean up files
+                if (file_exists($fullPath)) {
+                    unlink($fullPath);
+                }
+                
+                throw $e;
             }
 
         } else {
             $this->handleBackupFailure($openResult, $fullPath);
+        }
+    }
+
+    private function uploadToCloudStorage(string $disk, string $localPath, string $remotePath): bool
+    {
+        try {
+            Log::info("Uploading backup to {$disk}", [
+                'local_path' => $localPath,
+                'remote_path' => $remotePath
+            ]);
+
+            $result = $this->storageService->uploadFile($disk, $localPath, $remotePath);
+            
+            if ($result) {
+                Log::info("Backup uploaded successfully to {$disk}");
+            } else {
+                Log::error("Upload returned false for {$disk}");
+            }
+            
+            return $result;
+            
+        } catch (Exception $e) {
+            Log::error("Failed to upload to {$disk}", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return false;
         }
     }
 
@@ -142,29 +213,24 @@ class BackupProjectJob implements ShouldQueue
                 return;
             }
     
-            // Create database dump with a cleaner filename
             $timestamp = now()->format('Y_m_d_H_i_s');
             $databaseName = $dbCredentials['database'] ?? 'database';
             $dumpFileName = "{$databaseName}_backup_{$timestamp}.sql";
             $tempDumpPath = storage_path("app/temp/{$dumpFileName}");
             
-            // Ensure temp directory exists
             $tempDir = dirname($tempDumpPath);
             if (!is_dir($tempDir)) {
                 mkdir($tempDir, 0755, true);
             }
     
             if ($this->createDatabaseDump($dbCredentials, $tempDumpPath, $dbConfig)) {
-                // Add database dump to the ROOT of the zip (not in subfolder)
                 $zip->addFile($tempDumpPath, $dumpFileName);
                 
-                Log::info('Database backup added to zip root', [
+                Log::info('Database backup added to zip', [
                     'backup_id' => $this->backup->id,
-                    'dump_file' => $dumpFileName,
-                    'location' => 'root'
+                    'dump_file' => $dumpFileName
                 ]);
     
-                // Clean up temp file after adding to zip
                 register_shutdown_function(function() use ($tempDumpPath) {
                     if (file_exists($tempDumpPath)) {
                         unlink($tempDumpPath);
@@ -179,7 +245,6 @@ class BackupProjectJob implements ShouldQueue
             ]);
         }
     }
-    
 
     private function getDatabaseCredentials($dbConfig, $project): ?array
     {
@@ -198,7 +263,6 @@ class BackupProjectJob implements ShouldQueue
                 break;
             
             case 'project_config':
-                // Implement if you have project-specific DB configs
                 return $this->getCredentialsFromProjectConfig($project);
         }
 
@@ -271,8 +335,6 @@ class BackupProjectJob implements ShouldQueue
 
     private function getCredentialsFromProjectConfig($project): ?array
     {
-        // Implement if you store DB credentials in project configuration
-        // This is a placeholder for future implementation
         return null;
     }
 
@@ -285,7 +347,6 @@ class BackupProjectJob implements ShouldQueue
             $username = $credentials['username'];
             $password = $credentials['password'];
     
-            // Test database connection
             $mysqli = new \mysqli($host, $username, $password, $database, $port);
             if ($mysqli->connect_error) {
                 Log::error('Database connection failed', [
@@ -297,14 +358,12 @@ class BackupProjectJob implements ShouldQueue
             }
             $mysqli->close();
     
-            // Ensure output directory is writable
             $outputDir = dirname($outputPath);
             if (!is_writable($outputDir)) {
                 Log::error('Output directory not writable', ['path' => $outputDir]);
                 return false;
             }
     
-            // Build mysqldump command
             $command = sprintf(
                 'mysqldump -h%s -P%d -u%s %s %s > %s 2>&1',
                 escapeshellarg($host),
@@ -315,7 +374,6 @@ class BackupProjectJob implements ShouldQueue
                 escapeshellarg($outputPath)
             );
     
-            // Add table selection if specified
             if (isset($dbConfig['tables']) && $dbConfig['tables'] === 'selected' && isset($dbConfig['selected_tables'])) {
                 $tables = implode(' ', array_map('escapeshellarg', $dbConfig['selected_tables']));
                 $command = str_replace(
@@ -325,14 +383,12 @@ class BackupProjectJob implements ShouldQueue
                 );
             }
     
-            // Execute the command
             $output = [];
             $returnCode = 0;
             exec($command, $output, $returnCode);
     
             if ($returnCode !== 0) {
                 Log::error('mysqldump command failed', [
-                    'command' => $command,
                     'return_code' => $returnCode,
                     'output' => implode("\n", $output)
                 ]);
@@ -352,8 +408,7 @@ class BackupProjectJob implements ShouldQueue
     
         } catch (Exception $e) {
             Log::error('Error creating database dump', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'error' => $e->getMessage()
             ]);
             return false;
         }
@@ -361,7 +416,7 @@ class BackupProjectJob implements ShouldQueue
 
     private function handleBackupFailure($openResult, $fullPath): void
     {
-        $user = User::all()->first();
+        $user = User::first();
         Log::error('ZipArchive failed to open', [
             'fullPath' => $fullPath,
             'code' => $openResult,
@@ -374,8 +429,7 @@ class BackupProjectJob implements ShouldQueue
         ]);
 
         try {
-            Mail::to($user->email)
-                ->send(new BackupStatusMail($this->backup));
+            Mail::to($user->email)->send(new BackupStatusMail($this->backup));
         } catch (Exception $e) {
             Log::error('Failed to send backup status email', [
                 'backup_id' => $this->backup->id,

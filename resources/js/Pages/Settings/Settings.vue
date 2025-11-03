@@ -28,6 +28,7 @@ const tabs = ['S3', 'Backblaze', 'Wasabi']
 const activeTab = ref('S3')
 const loading = ref(false)
 const saving = ref(false)
+const testing = ref(false)
 
 const settings = ref({
     s3: { access_key: '', secret_key: '', bucket: '', region: '' },
@@ -73,6 +74,9 @@ const saveSettings = async (type) => {
             icon: 'success',
             title: response.data.message || 'Settings saved successfully!'
         })
+        
+        // Reload settings to get masked values
+        await loadSettings()
     } catch (error) {
         const errorMessage = error.response?.data?.message || 'Error saving settings. Please try again.'
 
@@ -82,6 +86,25 @@ const saveSettings = async (type) => {
         })
     } finally {
         saving.value = false
+    }
+}
+
+const testConnection = async (type) => {
+    testing.value = true
+    try {
+        const response = await axios.post('/settings/cloud/test-connection', { type })
+        
+        Toast.fire({
+            icon: response.data.success ? 'success' : 'error',
+            title: response.data.message
+        })
+    } catch (error) {
+        Toast.fire({
+            icon: 'error',
+            title: error.response?.data?.message || 'Connection test failed'
+        })
+    } finally {
+        testing.value = false
     }
 }
 </script>
@@ -175,6 +198,7 @@ const saveSettings = async (type) => {
                                         v-model="settings.s3.region"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="e.g., us-east-1"
                                         :disabled="saving"
                                         required
                                     />
@@ -190,6 +214,16 @@ const saveSettings = async (type) => {
                                             <i v-else class="ti ti-check me-2"></i>
                                             {{ saving ? 'Saving...' : 'Save S3 Settings' }}
                                         </button>
+                                        <button
+                                            type="button"
+                                            @click="testConnection('s3')"
+                                            class="btn btn-info text-white py-2 px-4 px-md-6 rounded-pill"
+                                            :disabled="testing || saving"
+                                        >
+                                            <span v-if="testing" class="spinner-border spinner-border-sm me-2"></span>
+                                            <i v-else class="ti ti-plug me-2"></i>
+                                            {{ testing ? 'Testing...' : 'Test Connection' }}
+                                        </button>
                                         <Link
                                             href="/dashboard"
                                             class="btn btn-secondary text-white py-2 px-4 px-md-6 rounded-pill"
@@ -204,10 +238,23 @@ const saveSettings = async (type) => {
 
                     <!-- Backblaze Configuration -->
                     <div v-if="activeTab === 'Backblaze'" class="config-section">
+                        <div class="alert alert-info mb-4">
+                            <i class="ti ti-info-circle me-2"></i>
+                            <strong>Backblaze B2 Configuration:</strong>
+                            <ul class="mb-0 mt-2">
+                                <li>Use your <strong>Application Key ID</strong> (not Master Key)</li>
+                                <li>Use your <strong>Application Key</strong> (not Master Key)</li>
+                                <li>Bucket must be the <strong>bucket name</strong> (e.g., "larasafe")</li>
+                                <li>Endpoint format: <code>https://s3.{region}.backblazeb2.com</code></li>
+                            </ul>
+                        </div>
                         <form @submit.prevent="saveSettings('b2')">
                             <div class="row g-3 g-md-4">
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Key ID</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Key ID (Application Key ID)
+                                        <i class="ti ti-info-circle text-muted" title="Your B2 Application Key ID"></i>
+                                    </label>
                                     <input
                                         v-model="settings.b2.key_id"
                                         type="text"
@@ -217,7 +264,10 @@ const saveSettings = async (type) => {
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Application Key</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Application Key
+                                        <i class="ti ti-info-circle text-muted" title="Your B2 Application Key (not Master Key)"></i>
+                                    </label>
                                     <input
                                         v-model="settings.b2.app_key"
                                         type="password"
@@ -227,23 +277,33 @@ const saveSettings = async (type) => {
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Bucket</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Bucket Name
+                                        <i class="ti ti-info-circle text-muted" title="Bucket name, not bucket ID"></i>
+                                    </label>
                                     <input
                                         v-model="settings.b2.bucket"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="e.g., larasafe"
                                         :disabled="saving"
                                         required
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Endpoint</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Endpoint
+                                        <i class="ti ti-info-circle text-muted" title="Full S3-compatible endpoint URL"></i>
+                                    </label>
                                     <input
                                         v-model="settings.b2.endpoint"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="https://s3.eu-central-003.backblazeb2.com"
                                         :disabled="saving"
+                                        required
                                     />
+                                    <small class="text-muted">Found in your B2 bucket details</small>
                                 </div>
                                 <div class="col-12 mt-3 mt-md-4">
                                     <div class="d-flex flex-column flex-sm-row gap-2">
@@ -255,6 +315,16 @@ const saveSettings = async (type) => {
                                             <span v-if="saving" class="spinner-border spinner-border-sm me-2"></span>
                                             <i v-else class="ti ti-check me-2"></i>
                                             {{ saving ? 'Saving...' : 'Save Backblaze Settings' }}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            @click="testConnection('b2')"
+                                            class="btn btn-info text-white py-2 px-4 px-md-6 rounded-pill"
+                                            :disabled="testing || saving"
+                                        >
+                                            <span v-if="testing" class="spinner-border spinner-border-sm me-2"></span>
+                                            <i v-else class="ti ti-plug me-2"></i>
+                                            {{ testing ? 'Testing...' : 'Test Connection' }}
                                         </button>
                                         <Link
                                             href="/dashboard"
@@ -308,6 +378,7 @@ const saveSettings = async (type) => {
                                         v-model="settings.wasabi.region"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="e.g., us-east-1"
                                         :disabled="saving"
                                     />
                                 </div>
@@ -321,6 +392,16 @@ const saveSettings = async (type) => {
                                             <span v-if="saving" class="spinner-border spinner-border-sm me-2"></span>
                                             <i v-else class="ti ti-check me-2"></i>
                                             {{ saving ? 'Saving...' : 'Save Wasabi Settings' }}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            @click="testConnection('wasabi')"
+                                            class="btn btn-info text-white py-2 px-4 px-md-6 rounded-pill"
+                                            :disabled="testing || saving"
+                                        >
+                                            <span v-if="testing" class="spinner-border spinner-border-sm me-2"></span>
+                                            <i v-else class="ti ti-plug me-2"></i>
+                                            {{ testing ? 'Testing...' : 'Test Connection' }}
                                         </button>
                                         <Link
                                             href="/dashboard"
@@ -340,7 +421,7 @@ const saveSettings = async (type) => {
 </template>
 
 <style scoped>
-/* Responsive tabs */
+/* Existing styles... */
 .tabs-container {
     display: flex;
     gap: 0.5rem;
@@ -370,7 +451,6 @@ const saveSettings = async (type) => {
     color: #2563eb !important;
 }
 
-/* Form controls */
 .form-control {
     transition: border 0.2s ease-in-out;
     font-size: 1rem;
@@ -392,7 +472,6 @@ const saveSettings = async (type) => {
     font-weight: 500;
 }
 
-/* Card styles */
 .hover-card {
     transition: transform 0.2s ease-in-out;
     cursor: pointer;
@@ -402,7 +481,6 @@ const saveSettings = async (type) => {
     transform: translateY(-2px);
 }
 
-/* Icon size */
 .fs-1 {
     font-size: 2rem !important;
 }
@@ -413,7 +491,6 @@ const saveSettings = async (type) => {
     }
 }
 
-/* Button styles */
 .rounded-pill {
     border-radius: 50rem;
 }
@@ -435,7 +512,6 @@ const saveSettings = async (type) => {
     }
 }
 
-/* Small text for mobile */
 .small-text {
     font-size: 0.9rem;
 }
@@ -446,7 +522,6 @@ const saveSettings = async (type) => {
     }
 }
 
-/* Config section */
 .config-section {
     animation: fadeIn 0.3s ease-in-out;
 }
@@ -462,13 +537,15 @@ const saveSettings = async (type) => {
     }
 }
 
-/* Validation styles */
-.is-invalid {
-    border-color: #dc3545;
+.alert-info {
+    background-color: #e3f2fd;
+    border-color: #90caf9;
+    color: #1565c0;
 }
 
-.invalid-feedback {
-    color: #dc3545;
-    font-size: 0.875rem;
+.alert-info code {
+    background-color: #bbdefb;
+    padding: 2px 6px;
+    border-radius: 3px;
 }
 </style>
