@@ -51,12 +51,14 @@ Route::middleware(['auth'])->group(function () {
         Route::delete('/delete-created-backup/{id}', [BackupController::class, 'destroySubBackup'])->name('backups.destroyCreatedBackup')->middleware('permission:delete backup');
         Route::post('/test-db-connection', [BackupController::class, 'testDatabaseConnection'])->name('test-db-connection');
         Route::post('/restore', [BackupController::class, 'restoreBackup'])->name('restore-backup')->middleware('permission:restore backup');
+        Route::post('/test-cloud-connection', [BackupController::class, 'testCloudConnection'])->name('backups.test-cloud');
     });
 
     Route::prefix('/settings')->group(function () {
         Route::get('/', [SettingsController::class, 'index'])->name('settings');
         Route::get('/settings', [SettingsController::class, 'getSettings']);
         Route::post('/{type}', [SettingsController::class, 'update']);
+        Route::post('/cloud/test-connection', [SettingsController::class, 'testConnection'])->name('settings.cloud.test');
     });
 
     // User Management Routes - IMPORTANT: More specific routes MUST come before generic ones

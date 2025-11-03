@@ -213,13 +213,9 @@ const testDatabaseConnection = () => {
                         <!-- Existing fields -->
                         <div class="mb-3">
                             <label for="projectSelect" class="form-label">Select Project</label>
-                            <select
-                                class="form-select"
-                                id="projectSelect"
-                                v-model="form.project_id"
+                            <select class="form-select" id="projectSelect" v-model="form.project_id"
                                 @blur="touched.project_id = true"
-                                :class="{ 'is-invalid': errors.project_id && touched.project_id }"
-                            >
+                                :class="{ 'is-invalid': errors.project_id && touched.project_id }">
                                 <option value="" disabled>Select a project</option>
                                 <option v-for="project in projects" :key="project.id" :value="project.id">
                                     {{ project.name }}
@@ -232,34 +228,69 @@ const testDatabaseConnection = () => {
 
                         <div class="mb-3">
                             <label for="backupFileName" class="form-label">File Name</label>
-                            <input
-                                type="text"
-                                class="form-control"
-                                id="backupFileName"
-                                v-model="form.file_name"
+                            <input type="text" class="form-control" id="backupFileName" v-model="form.file_name"
                                 @blur="touched.file_name = true"
-                                :class="{ 'is-invalid': errors.file_name && touched.file_name }"
-                            >
+                                :class="{ 'is-invalid': errors.file_name && touched.file_name }">
                             <div v-if="errors.file_name && touched.file_name" class="invalid-feedback">
                                 {{ errors.file_name }}
                             </div>
                         </div>
 
-                        <div class="mb-3">
-                            <label for="storageDisk" class="form-label">Storage Disk</label>
-                            <select
-                                class="form-select"
-                                id="storageDisk"
-                                v-model="form.storage_disk"
-                                @blur="touched.storage_disk = true"
-                                :class="{ 'is-invalid': errors.storage_disk && touched.storage_disk }"
-                            >
-                                <option value="local">Local</option>
-                                <option value="s3">S3</option>
-                                <option value="other">Other Cloud Storage</option>
-                            </select>
-                            <div v-if="errors.storage_disk && touched.storage_disk" class="invalid-feedback">
+                        <!-- Storage Location -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold">Where to Store Backup</label>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="radio" id="storeLocal" value="local"
+                                    v-model="form.storage_disk">
+                                <label class="form-check-label" for="storeLocal">
+                                    <strong>Local Storage</strong>
+                                    <small class="d-block text-muted">Store backups on the same server (default)</small>
+                                </label>
+                            </div>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="radio" id="storeS3" value="s3"
+                                    v-model="form.storage_disk">
+                                <label class="form-check-label" for="storeS3">
+                                    <strong>Amazon S3</strong>
+                                    <small class="d-block text-muted">Store securely on Amazon S3 bucket</small>
+                                </label>
+                            </div>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="radio" id="storeB2" value="b2"
+                                    v-model="form.storage_disk">
+                                <label class="form-check-label" for="storeB2">
+                                    <strong>Backblaze B2</strong>
+                                    <small class="d-block text-muted">Low-cost and reliable object storage</small>
+                                </label>
+                            </div>
+
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="radio" id="storeWasabi" value="wasabi"
+                                    v-model="form.storage_disk">
+                                <label class="form-check-label" for="storeWasabi">
+                                    <strong>Wasabi Cloud</strong>
+                                    <small class="d-block text-muted">Fast S3-compatible storage service</small>
+                                </label>
+                            </div>
+
+                            <div v-if="errors.storage_disk && touched.storage_disk" class="invalid-feedback d-block">
                                 {{ errors.storage_disk }}
+                            </div>
+
+                            <!-- Optional Info Box -->
+                            <div v-if="form.storage_disk" class="alert alert-info mt-2">
+                                <i class="ti ti-info-circle me-2"></i>
+                                <span v-if="form.storage_disk === 'local'">Backups will be stored locally on the same
+                                    server.</span>
+                                <span v-else-if="form.storage_disk === 's3'">Backups will be uploaded to Amazon S3.
+                                    Ensure your keys are configured in Cloud Settings.</span>
+                                <span v-else-if="form.storage_disk === 'b2'">Backups will be uploaded to Backblaze B2
+                                    cloud storage.</span>
+                                <span v-else-if="form.storage_disk === 'wasabi'">Backups will be uploaded to Wasabi
+                                    cloud storage.</span>
                             </div>
                         </div>
 
@@ -270,49 +301,35 @@ const testDatabaseConnection = () => {
                                     <div class="form-check form-switch">
                                         <input type="hidden" name="include_database" :value="0" />
 
-                                        <input
-                                            type="checkbox"
-                                            class="form-check-input"
-                                            id="includeDatabaseToggle"
-                                            v-model="form.include_database"
-                                        >
+                                        <input type="checkbox" class="form-check-input" id="includeDatabaseToggle"
+                                            v-model="form.include_database">
                                         <label class="form-check-label fw-bold" for="includeDatabaseToggle">
                                             <i class="ti ti-database me-2"></i>
                                             Include Database Backup
                                         </label>
                                     </div>
                                 </div>
-                                
+
                                 <div v-if="form.include_database" class="card-body">
                                     <!-- Database Source Selection -->
                                     <div class="mb-3">
                                         <label class="form-label">Database Credentials Source</label>
                                         <div class="form-check">
-                                            <input
-                                                class="form-check-input"
-                                                type="radio"
-                                                name="dbSource"
-                                                id="dbSourceEnv"
-                                                value="env"
-                                                v-model="form.db_source"
-                                            >
+                                            <input class="form-check-input" type="radio" name="dbSource"
+                                                id="dbSourceEnv" value="env" v-model="form.db_source">
                                             <label class="form-check-label" for="dbSourceEnv">
                                                 <strong>Use Project's .env File</strong>
-                                                <small class="d-block text-muted">Automatically read from project's environment file</small>
+                                                <small class="d-block text-muted">Automatically read from project's
+                                                    environment file</small>
                                             </label>
                                         </div>
                                         <div class="form-check">
-                                            <input
-                                                class="form-check-input"
-                                                type="radio"
-                                                name="dbSource"
-                                                id="dbSourceCustom"
-                                                value="custom"
-                                                v-model="form.db_source"
-                                            >
+                                            <input class="form-check-input" type="radio" name="dbSource"
+                                                id="dbSourceCustom" value="custom" v-model="form.db_source">
                                             <label class="form-check-label" for="dbSourceCustom">
                                                 <strong>Custom Database Credentials</strong>
-                                                <small class="d-block text-muted">Specify different database credentials</small>
+                                                <small class="d-block text-muted">Specify different database
+                                                    credentials</small>
                                             </label>
                                         </div>
                                         <div class="alert alert-info mt-2">
@@ -327,79 +344,53 @@ const testDatabaseConnection = () => {
                                         <div class="row">
                                             <div class="col-md-8 mb-3">
                                                 <label for="dbHost" class="form-label">Host</label>
-                                                <input
-                                                    type="text"
-                                                    class="form-control"
-                                                    id="dbHost"
-                                                    v-model="form.db_host"
-                                                    placeholder="localhost"
+                                                <input type="text" class="form-control" id="dbHost"
+                                                    v-model="form.db_host" placeholder="localhost"
                                                     @blur="touched.db_host = true"
-                                                    :class="{ 'is-invalid': errors.db_host && touched.db_host }"
-                                                >
+                                                    :class="{ 'is-invalid': errors.db_host && touched.db_host }">
                                                 <div v-if="errors.db_host && touched.db_host" class="invalid-feedback">
                                                     {{ errors.db_host }}
                                                 </div>
                                             </div>
                                             <div class="col-md-4 mb-3">
                                                 <label for="dbPort" class="form-label">Port</label>
-                                                <input
-                                                    type="number"
-                                                    class="form-control"
-                                                    id="dbPort"
-                                                    v-model="form.db_port"
-                                                    placeholder="3306"
-                                                >
+                                                <input type="number" class="form-control" id="dbPort"
+                                                    v-model="form.db_port" placeholder="3306">
                                             </div>
                                         </div>
                                         <div class="row">
                                             <div class="col-md-6 mb-3">
                                                 <label for="dbName" class="form-label">Database Name</label>
-                                                <input
-                                                    type="text"
-                                                    class="form-control"
-                                                    id="dbName"
-                                                    v-model="form.db_name"
-                                                    @blur="touched.db_name = true"
-                                                    :class="{ 'is-invalid': errors.db_name && touched.db_name }"
-                                                >
+                                                <input type="text" class="form-control" id="dbName"
+                                                    v-model="form.db_name" @blur="touched.db_name = true"
+                                                    :class="{ 'is-invalid': errors.db_name && touched.db_name }">
                                                 <div v-if="errors.db_name && touched.db_name" class="invalid-feedback">
                                                     {{ errors.db_name }}
                                                 </div>
                                             </div>
                                             <div class="col-md-6 mb-3">
                                                 <label for="dbUsername" class="form-label">Username</label>
-                                                <input
-                                                    type="text"
-                                                    class="form-control"
-                                                    id="dbUsername"
-                                                    v-model="form.db_username"
-                                                    @blur="touched.db_username = true"
-                                                    :class="{ 'is-invalid': errors.db_username && touched.db_username }"
-                                                >
-                                                <div v-if="errors.db_username && touched.db_username" class="invalid-feedback">
+                                                <input type="text" class="form-control" id="dbUsername"
+                                                    v-model="form.db_username" @blur="touched.db_username = true"
+                                                    :class="{ 'is-invalid': errors.db_username && touched.db_username }">
+                                                <div v-if="errors.db_username && touched.db_username"
+                                                    class="invalid-feedback">
                                                     {{ errors.db_username }}
                                                 </div>
                                             </div>
                                         </div>
                                         <div class="mb-3">
                                             <label for="dbPassword" class="form-label">Password</label>
-                                            <input
-                                                type="password"
-                                                class="form-control"
-                                                id="dbPassword"
-                                                v-model="form.db_password"
-                                                @blur="touched.db_password = true"
-                                                :class="{ 'is-invalid': errors.db_password && touched.db_password }"
-                                            >
-                                            <div v-if="errors.db_password && touched.db_password" class="invalid-feedback">
+                                            <input type="password" class="form-control" id="dbPassword"
+                                                v-model="form.db_password" @blur="touched.db_password = true"
+                                                :class="{ 'is-invalid': errors.db_password && touched.db_password }">
+                                            <div v-if="errors.db_password && touched.db_password"
+                                                class="invalid-feedback">
                                                 {{ errors.db_password }}
                                             </div>
                                         </div>
-                                        <button
-                                            type="button"
-                                            class="btn btn-outline-info btn-sm"
-                                            @click="testDatabaseConnection"
-                                        >
+                                        <button type="button" class="btn btn-outline-info btn-sm"
+                                            @click="testDatabaseConnection">
                                             <i class="ti ti-plug-connected me-1"></i>
                                             Test Connection
                                         </button>
@@ -407,52 +398,35 @@ const testDatabaseConnection = () => {
 
                                     <!-- Advanced Database Options -->
                                     <div class="mb-3">
-                                        <button
-                                            type="button"
-                                            class="btn btn-link p-0 text-decoration-none"
-                                            @click="showAdvancedDb = !showAdvancedDb"
-                                        >
-                                            <i :class="showAdvancedDb ? 'ti ti-chevron-down' : 'ti ti-chevron-right'"></i>
+                                        <button type="button" class="btn btn-link p-0 text-decoration-none"
+                                            @click="showAdvancedDb = !showAdvancedDb">
+                                            <i
+                                                :class="showAdvancedDb ? 'ti ti-chevron-down' : 'ti ti-chevron-right'"></i>
                                             Advanced Database Options
                                         </button>
-                                        
+
                                         <div v-if="showAdvancedDb" class="mt-3 border rounded p-3 bg-light">
                                             <div class="mb-3">
                                                 <label class="form-label">Tables to Backup</label>
                                                 <div class="form-check">
-                                                    <input
-                                                        class="form-check-input"
-                                                        type="radio"
-                                                        name="dbTables"
-                                                        id="tablesAll"
-                                                        value="all"
-                                                        v-model="form.db_tables"
-                                                    >
+                                                    <input class="form-check-input" type="radio" name="dbTables"
+                                                        id="tablesAll" value="all" v-model="form.db_tables">
                                                     <label class="form-check-label" for="tablesAll">
                                                         All Tables (Complete Database)
                                                     </label>
                                                 </div>
                                                 <div class="form-check">
-                                                    <input
-                                                        class="form-check-input"
-                                                        type="radio"
-                                                        name="dbTables"
-                                                        id="tablesSelected"
-                                                        value="selected"
-                                                        v-model="form.db_tables"
-                                                    >
+                                                    <input class="form-check-input" type="radio" name="dbTables"
+                                                        id="tablesSelected" value="selected" v-model="form.db_tables">
                                                     <label class="form-check-label" for="tablesSelected">
                                                         Selected Tables Only
                                                     </label>
                                                 </div>
-                                                
+
                                                 <div v-if="form.db_tables === 'selected'" class="mt-2">
-                                                    <textarea
-                                                        class="form-control"
-                                                        rows="3"
+                                                    <textarea class="form-control" rows="3"
                                                         placeholder="Enter table names separated by commas (e.g., users, posts, categories)"
-                                                        v-model="form.selected_tables"
-                                                    ></textarea>
+                                                        v-model="form.selected_tables"></textarea>
                                                     <small class="form-text text-muted">
                                                         Specify which tables to include in the backup
                                                     </small>
@@ -467,26 +441,17 @@ const testDatabaseConnection = () => {
                         <!-- Auto Backup Toggle and Fields -->
                         <div class="mb-3">
                             <div class="form-check form-switch">
-                                <input
-                                    type="checkbox"
-                                    class="form-check-input"
-                                    id="autoBackupToggle"
-                                    v-model="autoBackupEnabled"
-                                    @change="touched.frequency = true; touched.time = true"
-                                >
+                                <input type="checkbox" class="form-check-input" id="autoBackupToggle"
+                                    v-model="autoBackupEnabled" @change="touched.frequency = true; touched.time = true">
                                 <label class="form-check-label" for="autoBackupToggle">Enable Auto Backups</label>
                             </div>
                             <div v-if="autoBackupEnabled" class="mt-3">
                                 <div class="row">
                                     <div class="col-md-6 mb-3">
                                         <label for="frequency" class="form-label">Frequency</label>
-                                        <select
-                                            class="form-select"
-                                            id="frequency"
-                                            v-model="form.frequency"
+                                        <select class="form-select" id="frequency" v-model="form.frequency"
                                             @blur="touched.frequency = true"
-                                            :class="{ 'is-invalid': errors.frequency && touched.frequency }"
-                                        >
+                                            :class="{ 'is-invalid': errors.frequency && touched.frequency }">
                                             <option value="daily">Daily</option>
                                             <option value="weekly">Weekly</option>
                                             <option value="monthly">Monthly</option>
@@ -497,14 +462,9 @@ const testDatabaseConnection = () => {
                                     </div>
                                     <div class="col-md-6 mb-3">
                                         <label for="backupTime" class="form-label">Backup Time</label>
-                                        <input
-                                            type="time"
-                                            class="form-control"
-                                            id="backupTime"
-                                            v-model="form.time"
+                                        <input type="time" class="form-control" id="backupTime" v-model="form.time"
                                             @blur="touched.time = true"
-                                            :class="{ 'is-invalid': errors.time && touched.time }"
-                                        >
+                                            :class="{ 'is-invalid': errors.time && touched.time }">
                                         <div v-if="errors.time && touched.time" class="invalid-feedback">
                                             {{ errors.time }}
                                         </div>
@@ -518,7 +478,8 @@ const testDatabaseConnection = () => {
                                 <i class="ti ti-device-floppy me-1"></i>
                                 {{ form.processing ? 'Creating...' : 'Create Backup' }}
                             </button>
-                            <button type="button" class="btn btn-secondary" @click="router.visit('/backups/manage-backups')">
+                            <button type="button" class="btn btn-secondary"
+                                @click="router.visit('/backups/manage-backups')">
                                 <i class="ti ti-x me-1"></i>
                                 Cancel
                             </button>
@@ -546,7 +507,7 @@ const testDatabaseConnection = () => {
 }
 
 .card-header {
-    border-bottom: 1px solid rgba(0,0,0,.125);
+    border-bottom: 1px solid rgba(0, 0, 0, .125);
 }
 
 .form-check-label strong {

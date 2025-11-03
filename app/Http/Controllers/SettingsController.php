@@ -7,12 +7,19 @@ use Inertia\Inertia;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use App\Services\DynamicStorageService;
 
 class SettingsController extends Controller
 {
+    protected $storageService;
+
+    public function __construct(DynamicStorageService $storageService)
+    {
+        $this->storageService = $storageService;
+    }
+
     public function index()
     {
-        // Load existing settings from database
         $settings = $this->getAllSettings();
         
         return Inertia::render('Settings/Settings', [
@@ -22,7 +29,6 @@ class SettingsController extends Controller
 
     public function getSettings()
     {
-        // API endpoint to fetch settings
         return response()->json($this->getAllSettings());
     }
 
@@ -37,22 +43,52 @@ class SettingsController extends Controller
         ];
         
         foreach ($settingsData as $setting) {
-            $settings[$setting->type] = json_decode($setting->config, true);
+            $config = json_decode($setting->config, true);
+            
+            // Decrypt sensitive fields for display (mask them)
+            if ($config) {
+                $config = $this->maskSensitiveData($config, $setting->type);
+            }
+            
+            $settings[$setting->type] = $config;
         }
         
         return $settings;
     }
 
+    private function maskSensitiveData(array $config, string $type): array
+    {
+        $sensitiveFields = [
+            's3' => ['secret_key'],
+            'b2' => ['app_key'],
+            'wasabi' => ['secret_key']
+        ];
+
+        if (isset($sensitiveFields[$type])) {
+            foreach ($sensitiveFields[$type] as $field) {
+                if (isset($config[$field]) && !empty($config[$field])) {
+                    // Show only first 4 and last 4 characters
+                    $value = $config[$field];
+                    if (strlen($value) > 8) {
+                        $config[$field] = substr($value, 0, 4) . str_repeat('*', strlen($value) - 8) . substr($value, -4);
+                    } else {
+                        $config[$field] = str_repeat('*', strlen($value));
+                    }
+                }
+            }
+        }
+
+        return $config;
+    }
+
     public function update($type, Request $request)
     {
-        // Validate the type
         if (!in_array($type, ['s3', 'b2', 'wasabi'])) {
             return response()->json([
                 'message' => 'Invalid storage type'
             ], 400);
         }
 
-        // Validation rules based on type
         $rules = $this->getValidationRules($type);
         
         $validator = Validator::make($request->all(), $rules);
@@ -67,25 +103,25 @@ class SettingsController extends Controller
         $validated = $validator->validated();
 
         try {
-            // Check if record exists
+            // Encrypt sensitive data
+            $encryptedConfig = $this->encryptSensitiveData($validated, $type);
+
             $existingSetting = DB::table('cloud_settings')
                 ->where('type', $type)
                 ->first();
 
             if ($existingSetting) {
-                // Update existing record
                 DB::table('cloud_settings')
                     ->where('type', $type)
                     ->update([
-                        'config' => json_encode($validated),
+                        'config' => json_encode($encryptedConfig),
                         'updated_at' => now()
                     ]);
             } else {
-                // Insert new record with UUID
                 DB::table('cloud_settings')->insert([
                     'id' => (string) Str::uuid(),
                     'type' => $type,
-                    'config' => json_encode($validated),
+                    'config' => json_encode($encryptedConfig),
                     'created_at' => now(),
                     'updated_at' => now()
                 ]);
@@ -93,11 +129,58 @@ class SettingsController extends Controller
 
             return response()->json([
                 'message' => ucfirst($type) . ' settings saved successfully!',
-                'data' => $validated
+                'data' => $this->maskSensitiveData($validated, $type)
             ]);
         } catch (\Exception $e) {
+            \Log::error("Error saving {$type} settings", [
+                'error' => $e->getMessage()
+            ]);
+
             return response()->json([
                 'message' => 'Error saving settings: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    private function encryptSensitiveData(array $data, string $type): array
+    {
+        $sensitiveFields = [
+            's3' => ['secret_key'],
+            'b2' => ['app_key'],
+            'wasabi' => ['secret_key']
+        ];
+
+        if (isset($sensitiveFields[$type])) {
+            foreach ($sensitiveFields[$type] as $field) {
+                if (isset($data[$field]) && !empty($data[$field])) {
+                    // Only encrypt if it's not already masked
+                    if (strpos($data[$field], '*') === false) {
+                        $data[$field] = encrypt($data[$field]);
+                    }
+                }
+            }
+        }
+
+        return $data;
+    }
+
+    public function testConnection(Request $request)
+    {
+        $request->validate([
+            'type' => 'required|in:s3,b2,wasabi'
+        ]);
+
+        try {
+            $result = $this->storageService->testConnection($request->type);
+            return response()->json($result);
+        } catch (\Exception $e) {
+            \Log::error("Connection test failed for {$request->type}", [
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Connection test failed: ' . $e->getMessage()
             ], 500);
         }
     }
