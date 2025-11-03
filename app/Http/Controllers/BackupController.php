@@ -14,14 +14,17 @@ use Illuminate\Support\Facades\Storage;
 use Carbon\Carbon;
 use App\Models\CreatedBackup;
 use App\Jobs\RestoreBackupJob;
+use App\Services\DynamicStorageService;
 
 class BackupController extends Controller
 {
     protected $backupService;
+    protected $storageService;
 
-    public function __construct(ProjectBackupService $backupService)
+    public function __construct(ProjectBackupService $backupService, DynamicStorageService $storageService)
     {
         $this->backupService = $backupService;
+        $this->storageService = $storageService;
     }
 
     public function index()
@@ -46,7 +49,7 @@ class BackupController extends Controller
         $rules = [
             'project_id'       => 'required|exists:projects,id',
             'file_name'        => 'required|string|max:255',
-            'storage_disk'     => 'required|in:local,s3,other',
+            'storage_disk' => 'required|in:local,s3,b2,wasabi,other',
             'include_database' => 'boolean',
         ];
 
@@ -183,57 +186,104 @@ class BackupController extends Controller
     {
         try {
             $createdBackup = CreatedBackup::with('backup.project')->findOrFail($id);
+            $disk = $createdBackup->storage_disk ?? 'local';
 
-            // Use the file_path stored in the database
-            $filePath = storage_path("app/{$createdBackup->file_path}");
+            if ($disk === 'local') {
+                // Local storage download
+                $filePath = storage_path("app/{$createdBackup->file_path}");
 
-            // Enhanced file existence check
-            if (!file_exists($filePath)) {
-                \Log::error("Backup file not found", [
+                if (!file_exists($filePath)) {
+                    \Log::error("Backup file not found", [
+                        'backup_id' => $id,
+                        'expected_path' => $filePath
+                    ]);
+                    return redirect()->back()->with('error', 'Backup file not found on server.');
+                }
+
+                // Verify integrity if checksum exists
+                if ($createdBackup->checksum) {
+                    $currentChecksum = hash_file('sha256', $filePath);
+                    if ($currentChecksum !== $createdBackup->checksum) {
+                        \Log::warning("Backup file integrity check failed", [
+                            'backup_id' => $id,
+                            'expected_checksum' => $createdBackup->checksum,
+                            'actual_checksum' => $currentChecksum
+                        ]);
+                        return redirect()->back()->with('error', 'Backup file may be corrupted.');
+                    }
+                }
+
+                $timestamp = $createdBackup->created_at->format('Y-m-d_H-i-s');
+                $downloadName = "{$createdBackup->backup->project->name}_{$timestamp}.zip";
+
+                \Log::info("Backup downloaded", [
                     'backup_id' => $id,
-                    'expected_path' => $filePath,
-                    'stored_path' => $createdBackup->file_path
+                    'project' => $createdBackup->backup->project->name,
+                    'storage' => 'local'
                 ]);
 
-                return redirect()->back()->with('error', 'Backup file not found on server.');
-            }
-
-            // Optional: Verify file integrity if checksum exists
-            if ($createdBackup->checksum) {
-                $currentChecksum = hash_file('sha256', $filePath);
-                if ($currentChecksum !== $createdBackup->checksum) {
-                    \Log::warning("Backup file integrity check failed", [
-                        'backup_id' => $id,
-                        'expected_checksum' => $createdBackup->checksum,
-                        'actual_checksum' => $currentChecksum
-                    ]);
-
-                    return redirect()->back()->with('error', 'Backup file may be corrupted. Please contact administrator.');
+                return response()->download($filePath, $downloadName);
+            } else {
+                // Cloud storage download - download to temp first
+                $tempPath = storage_path("app/temp/download_{$id}_{$createdBackup->file_name}.zip");
+                $tempDir = dirname($tempPath);
+                
+                if (!is_dir($tempDir)) {
+                    mkdir($tempDir, 0755, true);
                 }
+
+                \Log::info("Downloading from cloud storage", [
+                    'backup_id' => $id,
+                    'storage' => $disk,
+                    'remote_path' => $createdBackup->file_path
+                ]);
+
+                $downloadSuccess = $this->storageService->downloadFile(
+                    $disk,
+                    $createdBackup->file_path,
+                    $tempPath
+                );
+
+                if (!$downloadSuccess || !file_exists($tempPath)) {
+                    \Log::error("Failed to download from cloud storage", [
+                        'backup_id' => $id,
+                        'storage' => $disk
+                    ]);
+                    return redirect()->back()->with('error', 'Failed to download backup from cloud storage.');
+                }
+
+                // Verify integrity if checksum exists
+                if ($createdBackup->checksum) {
+                    $currentChecksum = hash_file('sha256', $tempPath);
+                    if ($currentChecksum !== $createdBackup->checksum) {
+                        unlink($tempPath);
+                        return redirect()->back()->with('error', 'Downloaded backup file is corrupted.');
+                    }
+                }
+
+                $timestamp = $createdBackup->created_at->format('Y-m-d_H-i-s');
+                $downloadName = "{$createdBackup->backup->project->name}_{$timestamp}.zip";
+
+                \Log::info("Cloud backup downloaded successfully", [
+                    'backup_id' => $id,
+                    'storage' => $disk,
+                    'size' => filesize($tempPath)
+                ]);
+
+                // Delete temp file after download
+                return response()->download($tempPath, $downloadName)->deleteFileAfterSend(true);
             }
 
-            // Create a user-friendly download name with timestamp
-            $timestamp = $createdBackup->created_at->format('Y-m-d_H-i-s');
-            $downloadName = "{$createdBackup->backup->project->name}_{$timestamp}.zip";
-
-            // Log successful download for audit
-            \Log::info("Backup downloaded", [
-                'backup_id' => $id,
-                'project' => $createdBackup->backup->project->name,
-                'file_size' => $createdBackup->size,
-                'download_name' => $downloadName
-            ]);
-
-            return response()->download($filePath, $downloadName);
         } catch (\Exception $e) {
             \Log::error("Download failed", [
                 'backup_id' => $id,
                 'error' => $e->getMessage()
             ]);
 
-            return redirect()->back()->with('error', 'Failed to download backup. Please try again.');
+            return redirect()->back()->with('error', 'Failed to download backup: ' . $e->getMessage());
         }
     }
+
     public function destroy($id)
     {
         $backup = Backup::with(['createdBackups', 'project'])->find($id);
@@ -339,47 +389,49 @@ class BackupController extends Controller
             $deletedVia = 'none';
 
             if ($filePath) {
-                // 1. Try Laravel Storage (correct disk)
-                if (Storage::disk($storageDisk)->exists($filePath)) {
-                    if (Storage::disk($storageDisk)->delete($filePath)) {
-                        $fileDeleted = true;
-                        $deletedVia = 'laravel-storage';
+                if ($storageDisk === 'local') {
+                    // Local storage deletion
+                    if (Storage::disk('local')->exists($filePath)) {
+                        if (Storage::disk('local')->delete($filePath)) {
+                            $fileDeleted = true;
+                            $deletedVia = 'laravel-storage';
+                        }
                     }
-                }
 
-                // 2. Fallback: Direct filesystem (most common fix)
-                $fullPath = storage_path("app/{$filePath}");
-                if (!$fileDeleted && file_exists($fullPath)) {
-                    if (unlink($fullPath)) {
-                        $fileDeleted = true;
-                        $deletedVia = 'direct-unlink';
+                    if (!$fileDeleted) {
+                        $fullPath = storage_path("app/{$filePath}");
+                        if (file_exists($fullPath) && unlink($fullPath)) {
+                            $fileDeleted = true;
+                            $deletedVia = 'direct-unlink';
+                        }
                     }
-                }
 
-                // 3. Final fallback: Check public/storage link
-                if (!$fileDeleted) {
-                    $publicPath = public_path("storage/{$filePath}");
-                    if (file_exists($publicPath) && unlink($publicPath)) {
-                        $fileDeleted = true;
-                        $deletedVia = 'public-storage';
+                    if (!$fileDeleted) {
+                        $publicPath = public_path("storage/{$filePath}");
+                        if (file_exists($publicPath) && unlink($publicPath)) {
+                            $fileDeleted = true;
+                            $deletedVia = 'public-storage';
+                        }
                     }
+                } else {
+                    // Cloud storage deletion
+                    $fileDeleted = $this->storageService->deleteFile($storageDisk, $filePath);
+                    $deletedVia = $fileDeleted ? 'cloud-storage' : 'failed';
                 }
             } else {
-                $fileDeleted = true; // No file path = nothing to delete
+                $fileDeleted = true;
                 $deletedVia = 'no-path';
             }
 
             // Delete DB record
             $createdBackup->delete();
 
-            // Log for debugging
             \Log::info("Backup file deleted", [
                 'id' => $id,
                 'file' => $filePath,
                 'disk' => $storageDisk,
                 'method' => $deletedVia,
-                'size' => $size,
-                'project' => $projectName
+                'size' => $size
             ]);
 
             $message = "Backup '{$fileName}' deleted successfully";
@@ -387,7 +439,14 @@ class BackupController extends Controller
                 $message .= " (" . $this->formatBytes($size) . " freed)";
             }
             if (!$fileDeleted) {
-                $message .= " (Warning: File may still exist on disk)";
+                $message .= " (Warning: File may still exist on {$storageDisk})";
+            }
+
+            if (request()->expectsJson()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => $message
+                ]);
             }
 
             return redirect()->back()->with('success', $message);
@@ -395,11 +454,19 @@ class BackupController extends Controller
         } catch (\Exception $e) {
             \Log::error("Failed to delete backup file", [
                 'id' => $id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'error' => $e->getMessage()
             ]);
 
-            return redirect()->back()->with('error', 'Failed to delete backup: ' . $e->getMessage());
+            $errorMessage = 'Failed to delete backup: ' . $e->getMessage();
+
+            if (request()->expectsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $errorMessage
+                ], 500);
+            }
+
+            return redirect()->back()->with('error', $errorMessage);
         }
     }
 
@@ -696,4 +763,19 @@ class BackupController extends Controller
 
         return back()->with('status', 'Backup restore initiated successfully.');
     }
+
+    /**
+     * Test cloud storage connection
+     */
+    public function testCloudConnection(Request $request)
+    {
+        $request->validate([
+            'storage_type' => 'required|in:s3,b2,wasabi'
+        ]);
+
+        $result = $this->storageService->testConnection($request->storage_type);
+
+        return response()->json($result);
+    }
+
 }
