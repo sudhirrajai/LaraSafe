@@ -87,7 +87,7 @@ class DynamicStorageService
                     'region' => $config['region'] ?? 'us-east-1',
                     'bucket' => $config['bucket'] ?? null,
                     'endpoint' => $config['endpoint'] ?? null,
-                    'use_path_style_endpoint' => false,
+                    'use_path_style_endpoint' => true,
                     'throw' => false,
                 ];
 
