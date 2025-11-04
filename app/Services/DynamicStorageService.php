@@ -35,10 +35,22 @@ class DynamicStorageService
             return null;
         }
 
+        // Decrypt sensitive fields BEFORE building config
+        $config = $this->decryptSensitiveFields($diskType, $config);
+
+        // Log decrypted values (for debugging - remove in production)
+        \Log::info("Decrypted config for {$diskType}", [
+            'has_key' => isset($config['key_id']) || isset($config['access_key']),
+            'has_secret' => isset($config['app_key']) || isset($config['secret_key']),
+            'bucket' => $config['bucket'] ?? 'not set',
+            'endpoint' => $config['endpoint'] ?? 'not set',
+        ]);
+
         // Configure the disk dynamically
         $diskConfig = $this->buildDiskConfig($diskType, $config);
         
         if (!$diskConfig) {
+            \Log::error("Failed to build disk config for: {$diskType}");
             return null;
         }
 
@@ -66,9 +78,6 @@ class DynamicStorageService
      */
     private function buildDiskConfig(string $type, array $config): ?array
     {
-        // Decrypt sensitive fields
-        $config = $this->decryptSensitiveFields($type, $config);
-
         switch ($type) {
             case 's3':
                 return [
@@ -78,12 +87,11 @@ class DynamicStorageService
                     'region' => $config['region'] ?? 'us-east-1',
                     'bucket' => $config['bucket'] ?? null,
                     'endpoint' => $config['endpoint'] ?? null,
-                    'use_path_style_endpoint' => false,
+                    'use_path_style_endpoint' => true,
                     'throw' => false,
                 ];
 
             case 'b2':
-                // FIXED: Use the endpoint directly from config
                 $endpoint = $config['endpoint'] ?? null;
                 
                 // Validate endpoint format
@@ -91,16 +99,31 @@ class DynamicStorageService
                     \Log::error("Invalid B2 endpoint", ['endpoint' => $endpoint]);
                     return null;
                 }
+
+                // Extract region from endpoint (e.g., eu-central-003 from https://s3.eu-central-003.backblazeb2.com)
+                $region = 'us-west-000'; // Default B2 region
+                if (preg_match('/s3\.([a-z0-9\-]+)\.backblazeb2\.com/', $endpoint, $matches)) {
+                    $region = $matches[1];
+                }
+                
+                \Log::info("B2 Configuration", [
+                    'endpoint' => $endpoint,
+                    'region' => $region,
+                    'bucket' => $config['bucket'] ?? 'not set',
+                    'key_id_length' => isset($config['key_id']) ? strlen($config['key_id']) : 0,
+                    'app_key_length' => isset($config['app_key']) ? strlen($config['app_key']) : 0,
+                ]);
                 
                 return [
                     'driver' => 's3',
                     'key' => $config['key_id'] ?? null,
                     'secret' => $config['app_key'] ?? null,
-                    'region' => 'eu-central-003', // Match your bucket region
+                    'region' => $region,
                     'bucket' => $config['bucket'] ?? null,
                     'endpoint' => $endpoint,
-                    'use_path_style_endpoint' => true,
-                    'throw' => false,
+                    'use_path_style_endpoint' => false, // Changed to false for B2
+                    'throw' => true, // Changed to true for better error messages
+                    'version' => 'latest',
                 ];
 
             case 'wasabi':
@@ -139,21 +162,67 @@ class DynamicStorageService
         if (isset($sensitiveFields[$type])) {
             foreach ($sensitiveFields[$type] as $field) {
                 if (isset($config[$field]) && !empty($config[$field])) {
+                    // Check if the value is masked (contains *)
+                    if (strpos($config[$field], '*') !== false) {
+                        \Log::error("Attempted to use masked value for {$field} in {$type}");
+                        throw new \Exception("Cannot use masked credential value. Please re-enter the {$field}.");
+                    }
+                    
                     try {
-                        // Check if the value is encrypted (not masked with *)
-                        if (strpos($config[$field], '*') === false) {
-                            $config[$field] = decrypt($config[$field]);
+                        // Only decrypt if it looks like encrypted data
+                        $value = $config[$field];
+                        
+                        // Laravel encrypted strings typically start with "eyJp" (base64 encoded {"i...)
+                        if (strpos($value, 'eyJp') === 0 || $this->looksEncrypted($value)) {
+                            $decrypted = decrypt($value);
+                            $config[$field] = $decrypted;
+                            
+                            \Log::info("Successfully decrypted {$field} for {$type}", [
+                                'length' => strlen($decrypted)
+                            ]);
+                        } else {
+                            // If it doesn't look encrypted, use as-is (might be plain text in DB)
+                            \Log::warning("{$field} for {$type} doesn't appear to be encrypted");
                         }
                     } catch (\Exception $e) {
-                        \Log::warning("Failed to decrypt {$field} for {$type}", [
-                            'error' => $e->getMessage()
+                        \Log::error("Failed to decrypt {$field} for {$type}", [
+                            'error' => $e->getMessage(),
+                            'value_start' => substr($config[$field], 0, 20)
                         ]);
+                        throw new \Exception("Failed to decrypt credentials. Please re-enter your {$field}.");
                     }
                 }
             }
         }
 
         return $config;
+    }
+
+    /**
+     * Check if a value looks like it's encrypted
+     */
+    private function looksEncrypted(string $value): bool
+    {
+        // Laravel encrypted values are base64 encoded JSON
+        // They typically contain certain patterns
+        if (strlen($value) < 50) {
+            return false; // Too short to be encrypted
+        }
+        
+        // Try to base64 decode and check if it's valid JSON
+        try {
+            $decoded = base64_decode($value, true);
+            if ($decoded === false) {
+                return false;
+            }
+            
+            $json = json_decode($decoded, true);
+            return json_last_error() === JSON_ERROR_NONE && 
+                   isset($json['iv']) && 
+                   isset($json['value']);
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 
     /**
@@ -172,13 +241,25 @@ class DynamicStorageService
             }
 
             // Try to list files (will fail if credentials are wrong)
-            Storage::disk($disk)->files();
+            // Use root path for testing
+            $files = Storage::disk($disk)->files('');
 
             return [
                 'success' => true,
-                'message' => 'Connection successful'
+                'message' => 'Connection successful! Found ' . count($files) . ' files.'
             ];
         } catch (\Exception $e) {
+            $errorMessage = $e->getMessage();
+            
+            // Parse AWS error for more helpful messages
+            if (strpos($errorMessage, 'SignatureDoesNotMatch') !== false) {
+                $errorMessage = 'Invalid credentials. Please check your Key ID and Application Key.';
+            } elseif (strpos($errorMessage, '403') !== false) {
+                $errorMessage = 'Access denied. Please verify your credentials and bucket permissions.';
+            } elseif (strpos($errorMessage, '404') !== false) {
+                $errorMessage = 'Bucket not found. Please check your bucket name.';
+            }
+            
             \Log::error("Storage connection test failed for {$diskType}", [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
@@ -186,7 +267,7 @@ class DynamicStorageService
 
             return [
                 'success' => false,
-                'message' => 'Connection failed: ' . $e->getMessage()
+                'message' => $errorMessage
             ];
         }
     }
