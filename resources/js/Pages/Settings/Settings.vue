@@ -1,6 +1,6 @@
 <script setup>
 import MainLayout from '@/Layouts/MainLayout.vue'
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import axios from 'axios'
 import { Link } from '@inertiajs/vue3'
 import Swal from 'sweetalert2'
@@ -36,9 +36,46 @@ const settings = ref({
     wasabi: { access_key: '', secret_key: '', bucket: '', region: '' }
 })
 
+// Track original masked values
+const originalMaskedValues = ref({
+    s3: { secret_key: null },
+    b2: { app_key: null },
+    wasabi: { secret_key: null }
+})
+
+// Track if sensitive fields have been modified
+const sensitiveFieldsModified = ref({
+    s3: { secret_key: false },
+    b2: { app_key: false },
+    wasabi: { secret_key: false }
+})
+
 onMounted(async () => {
     await loadSettings()
 })
+
+// Watch for changes in sensitive fields
+watch(() => settings.value.s3.secret_key, (newVal) => {
+    if (originalMaskedValues.value.s3.secret_key && newVal !== originalMaskedValues.value.s3.secret_key) {
+        sensitiveFieldsModified.value.s3.secret_key = true
+    }
+})
+
+watch(() => settings.value.b2.app_key, (newVal) => {
+    if (originalMaskedValues.value.b2.app_key && newVal !== originalMaskedValues.value.b2.app_key) {
+        sensitiveFieldsModified.value.b2.app_key = true
+    }
+})
+
+watch(() => settings.value.wasabi.secret_key, (newVal) => {
+    if (originalMaskedValues.value.wasabi.secret_key && newVal !== originalMaskedValues.value.wasabi.secret_key) {
+        sensitiveFieldsModified.value.wasabi.secret_key = true
+    }
+})
+
+const isMaskedValue = (value) => {
+    return value && value.includes('*')
+}
 
 const loadSettings = async () => {
     loading.value = true
@@ -47,12 +84,21 @@ const loadSettings = async () => {
         if (response.data) {
             if (response.data.s3) {
                 settings.value.s3 = { ...settings.value.s3, ...response.data.s3 }
+                if (isMaskedValue(response.data.s3.secret_key)) {
+                    originalMaskedValues.value.s3.secret_key = response.data.s3.secret_key
+                }
             }
             if (response.data.b2) {
                 settings.value.b2 = { ...settings.value.b2, ...response.data.b2 }
+                if (isMaskedValue(response.data.b2.app_key)) {
+                    originalMaskedValues.value.b2.app_key = response.data.b2.app_key
+                }
             }
             if (response.data.wasabi) {
                 settings.value.wasabi = { ...settings.value.wasabi, ...response.data.wasabi }
+                if (isMaskedValue(response.data.wasabi.secret_key)) {
+                    originalMaskedValues.value.wasabi.secret_key = response.data.wasabi.secret_key
+                }
             }
         }
     } catch (error) {
@@ -68,12 +114,42 @@ const loadSettings = async () => {
 const saveSettings = async (type) => {
     saving.value = true
     try {
-        const response = await axios.post(`/settings/${type}`, settings.value[type])
+        const dataToSend = { ...settings.value[type] }
+        
+        // Handle sensitive fields based on type
+        if (type === 's3') {
+            // If secret_key hasn't been modified and is masked, don't send it
+            if (!sensitiveFieldsModified.value.s3.secret_key && isMaskedValue(dataToSend.secret_key)) {
+                // Keep the masked value - backend will handle it
+                // Or you can remove it and backend will use existing value
+            }
+        } else if (type === 'b2') {
+            // If app_key hasn't been modified and is masked, keep it
+            if (!sensitiveFieldsModified.value.b2.app_key && isMaskedValue(dataToSend.app_key)) {
+                // Keep the masked value - backend will handle it
+            }
+        } else if (type === 'wasabi') {
+            // If secret_key hasn't been modified and is masked, keep it
+            if (!sensitiveFieldsModified.value.wasabi.secret_key && isMaskedValue(dataToSend.secret_key)) {
+                // Keep the masked value - backend will handle it
+            }
+        }
+
+        const response = await axios.post(`/settings/${type}`, dataToSend)
 
         Toast.fire({
             icon: 'success',
             title: response.data.message || 'Settings saved successfully!'
         })
+        
+        // Reset modification tracking
+        if (type === 's3') {
+            sensitiveFieldsModified.value.s3.secret_key = false
+        } else if (type === 'b2') {
+            sensitiveFieldsModified.value.b2.app_key = false
+        } else if (type === 'wasabi') {
+            sensitiveFieldsModified.value.wasabi.secret_key = false
+        }
         
         // Reload settings to get masked values
         await loadSettings()
@@ -106,6 +182,21 @@ const testConnection = async (type) => {
     } finally {
         testing.value = false
     }
+}
+
+// Show placeholder text for masked fields
+const getPlaceholder = (type, field) => {
+    const maskedValues = {
+        s3: { secret_key: originalMaskedValues.value.s3.secret_key },
+        b2: { app_key: originalMaskedValues.value.b2.app_key },
+        wasabi: { secret_key: originalMaskedValues.value.wasabi.secret_key }
+    }
+    
+    if (maskedValues[type] && maskedValues[type][field]) {
+        return 'Leave unchanged or enter new value'
+    }
+    
+    return ''
 }
 </script>
 
@@ -173,14 +264,23 @@ const testConnection = async (type) => {
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Secret Key</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Secret Key
+                                        <span v-if="isMaskedValue(settings.s3.secret_key)" class="text-muted small">
+                                            (currently saved)
+                                        </span>
+                                    </label>
                                     <input
                                         v-model="settings.s3.secret_key"
                                         type="password"
                                         class="form-control border rounded p-2 p-md-3"
+                                        :placeholder="getPlaceholder('s3', 'secret_key')"
                                         :disabled="saving"
-                                        required
+                                        :required="!isMaskedValue(originalMaskedValues.s3.secret_key)"
                                     />
+                                    <small v-if="isMaskedValue(originalMaskedValues.s3.secret_key)" class="text-muted">
+                                        Leave empty to keep current value, or enter new value to update
+                                    </small>
                                 </div>
                                 <div class="col-12 col-md-6">
                                     <label class="form-label text-dark mb-2">Bucket</label>
@@ -267,14 +367,21 @@ const testConnection = async (type) => {
                                     <label class="form-label text-dark mb-2">
                                         Application Key
                                         <i class="ti ti-info-circle text-muted" title="Your B2 Application Key (not Master Key)"></i>
+                                        <span v-if="isMaskedValue(settings.b2.app_key)" class="text-muted small">
+                                            (currently saved)
+                                        </span>
                                     </label>
                                     <input
                                         v-model="settings.b2.app_key"
                                         type="password"
                                         class="form-control border rounded p-2 p-md-3"
+                                        :placeholder="getPlaceholder('b2', 'app_key')"
                                         :disabled="saving"
-                                        required
+                                        :required="!isMaskedValue(originalMaskedValues.b2.app_key)"
                                     />
+                                    <small v-if="isMaskedValue(originalMaskedValues.b2.app_key)" class="text-muted">
+                                        Leave empty to keep current value, or enter new value to update
+                                    </small>
                                 </div>
                                 <div class="col-12 col-md-6">
                                     <label class="form-label text-dark mb-2">
@@ -353,14 +460,23 @@ const testConnection = async (type) => {
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Secret Key</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Secret Key
+                                        <span v-if="isMaskedValue(settings.wasabi.secret_key)" class="text-muted small">
+                                            (currently saved)
+                                        </span>
+                                    </label>
                                     <input
                                         v-model="settings.wasabi.secret_key"
                                         type="password"
                                         class="form-control border rounded p-2 p-md-3"
+                                        :placeholder="getPlaceholder('wasabi', 'secret_key')"
                                         :disabled="saving"
-                                        required
+                                        :required="!isMaskedValue(originalMaskedValues.wasabi.secret_key)"
                                     />
+                                    <small v-if="isMaskedValue(originalMaskedValues.wasabi.secret_key)" class="text-muted">
+                                        Leave empty to keep current value, or enter new value to update
+                                    </small>
                                 </div>
                                 <div class="col-12 col-md-6">
                                     <label class="form-label text-dark mb-2">Bucket</label>
@@ -380,6 +496,7 @@ const testConnection = async (type) => {
                                         class="form-control border rounded p-2 p-md-3"
                                         placeholder="e.g., us-east-1"
                                         :disabled="saving"
+                                        required
                                     />
                                 </div>
                                 <div class="col-12 mt-3 mt-md-4">
@@ -421,7 +538,7 @@ const testConnection = async (type) => {
 </template>
 
 <style scoped>
-/* Existing styles... */
+/* All your existing styles remain the same */
 .tabs-container {
     display: flex;
     gap: 0.5rem;
