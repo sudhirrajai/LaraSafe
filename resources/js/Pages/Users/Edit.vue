@@ -59,10 +59,10 @@ const submit = () => {
             <h5 class="mb-0 fw-bold">Edit User</h5>
             <div class="d-flex gap-2">
               <Link :href="`/user-management/${user.id}/permissions`" class="btn btn-light-info text-info">
-                <i class="ti ti-lock me-1"></i> Manage Permissions
+              <i class="ti ti-lock me-1"></i> Manage Permissions
               </Link>
               <Link href="/user-management" class="btn btn-light-primary text-primary">
-                <i class="ti ti-arrow-left me-1"></i> Back to Users
+              <i class="ti ti-arrow-left me-1"></i> Back to Users
               </Link>
             </div>
           </div>
@@ -74,11 +74,11 @@ const submit = () => {
               <div class="col-12 mb-4">
                 <div class="alert alert-light-info d-flex align-items-center">
                   <div v-if="user.avatar" class="me-3">
-                    <img :src="user.avatar" alt="avatar" class="rounded-circle" width="50" height="50">
+                    <img :src="`/storage/${user.avatar}`" alt="avatar" class="rounded-circle" width="50" height="50">
                   </div>
                   <div v-else class="me-3">
                     <div class="rounded-circle bg-primary text-white d-flex align-items-center justify-content-center"
-                         style="width: 50px; height: 50px; font-size: 20px;">
+                      style="width: 50px; height: 50px; font-size: 20px;">
                       {{ user.name.charAt(0).toUpperCase() }}
                     </div>
                   </div>
@@ -100,16 +100,16 @@ const submit = () => {
               <!-- Name -->
               <div class="col-md-6 mb-3">
                 <label for="name" class="form-label">Name <span class="text-danger">*</span></label>
-                <input type="text" class="form-control" :class="{ 'is-invalid': form.errors.name }"
-                       id="name" v-model="form.name" placeholder="Enter user name">
+                <input type="text" class="form-control" :class="{ 'is-invalid': form.errors.name }" id="name"
+                  v-model="form.name" placeholder="Enter user name">
                 <div v-if="form.errors.name" class="invalid-feedback">{{ form.errors.name }}</div>
               </div>
 
               <!-- Email -->
               <div class="col-md-6 mb-3">
                 <label for="email" class="form-label">Email <span class="text-danger">*</span></label>
-                <input type="email" class="form-control" :class="{ 'is-invalid': form.errors.email }"
-                       id="email" v-model="form.email" placeholder="Enter email address">
+                <input type="email" class="form-control" :class="{ 'is-invalid': form.errors.email }" id="email"
+                  v-model="form.email" placeholder="Enter email address">
                 <div v-if="form.errors.email" class="invalid-feedback">{{ form.errors.email }}</div>
               </div>
 
@@ -124,19 +124,10 @@ const submit = () => {
                   <div class="col-md-6 mb-3">
                     <label for="password" class="form-label">New Password</label>
                     <div class="input-group">
-                      <input 
-                        :type="showPassword ? 'text' : 'password'" 
-                        class="form-control" 
-                        :class="{ 'is-invalid': form.errors.password }"
-                        id="password" 
-                        v-model="form.password" 
-                        placeholder="Leave blank to keep current"
-                      >
-                      <button 
-                        class="btn btn-outline-secondary" 
-                        type="button"
-                        @click="showPassword = !showPassword"
-                      >
+                      <input :type="showPassword ? 'text' : 'password'" class="form-control"
+                        :class="{ 'is-invalid': form.errors.password }" id="password" v-model="form.password"
+                        placeholder="Leave blank to keep current">
+                      <button class="btn btn-outline-secondary" type="button" @click="showPassword = !showPassword">
                         <i :class="showPassword ? 'ti ti-eye-off' : 'ti ti-eye'"></i>
                       </button>
                     </div>
@@ -149,18 +140,10 @@ const submit = () => {
                   <div class="col-md-6 mb-3">
                     <label for="password_confirmation" class="form-label">Confirm New Password</label>
                     <div class="input-group">
-                      <input 
-                        :type="showPasswordConfirmation ? 'text' : 'password'" 
-                        class="form-control" 
-                        id="password_confirmation"
-                        v-model="form.password_confirmation" 
-                        placeholder="Confirm password"
-                      >
-                      <button 
-                        class="btn btn-outline-secondary" 
-                        type="button"
-                        @click="showPasswordConfirmation = !showPasswordConfirmation"
-                      >
+                      <input :type="showPasswordConfirmation ? 'text' : 'password'" class="form-control"
+                        id="password_confirmation" v-model="form.password_confirmation" placeholder="Confirm password">
+                      <button class="btn btn-outline-secondary" type="button"
+                        @click="showPasswordConfirmation = !showPasswordConfirmation">
                         <i :class="showPasswordConfirmation ? 'ti ti-eye-off' : 'ti ti-eye'"></i>
                       </button>
                     </div>
@@ -179,31 +162,22 @@ const submit = () => {
                 <label class="form-label">Assign Role <span class="text-danger">*</span></label>
                 <div class="row">
                   <div v-for="role in roles" :key="role.id" class="col-md-6 mb-3">
-                    <div 
-                      class="card h-100" 
-                      :class="{ 
-                        'border-primary': form.role === role.name,
-                        'opacity-50': isRoleDisabled(role.name)
-                      }"
-                    >
+                    <div class="card h-100" :class="{
+                      'border-primary': form.role === role.name,
+                      'opacity-50': isRoleDisabled(role.name)
+                    }">
                       <div class="card-body p-3">
                         <div class="form-check">
-                          <input 
-                            type="radio" 
-                            class="form-check-input" 
-                            :id="`role-${role.id}`"
-                            :value="role.name" 
-                            v-model="form.role"
-                            :disabled="isRoleDisabled(role.name)"
-                          >
+                          <input type="radio" class="form-check-input" :id="`role-${role.id}`" :value="role.name"
+                            v-model="form.role" :disabled="isRoleDisabled(role.name)">
                           <label class="form-check-label w-100" :for="`role-${role.id}`">
                             <div class="d-flex justify-content-between align-items-center mb-1">
                               <strong class="text-capitalize">{{ role.name }}</strong>
                               <span :class="[
                                 'badge',
                                 role.name === 'admin' ? 'bg-danger' :
-                                role.name === 'manager' ? 'bg-warning' :
-                                role.name === 'user' ? 'bg-primary' : 'bg-secondary'
+                                  role.name === 'manager' ? 'bg-warning' :
+                                    role.name === 'user' ? 'bg-primary' : 'bg-secondary'
                               ]">
                                 {{ role.name }}
                               </span>
@@ -225,7 +199,8 @@ const submit = () => {
 
                 <div class="alert alert-warning mt-3 p-2">
                   <i class="ti ti-alert-triangle me-1"></i>
-                  <small>Changing the role will reset permissions to defaults. Use "Manage Permissions" to customize.</small>
+                  <small>Changing the role will reset permissions to defaults. Use "Manage Permissions" to
+                    customize.</small>
                 </div>
               </div>
 
@@ -241,7 +216,7 @@ const submit = () => {
                     </span>
                   </button>
                   <Link href="/user-management" class="btn btn-light-danger text-danger">
-                    Cancel
+                  Cancel
                   </Link>
                 </div>
               </div>

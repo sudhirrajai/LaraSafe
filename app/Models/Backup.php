@@ -11,7 +11,6 @@ class Backup extends Model
 {
     use HasFactory;
 
-    // UUID Configuration
     protected $keyType = 'string';
     public $incrementing = false;
 
@@ -42,10 +41,14 @@ class Backup extends Model
     protected static function boot()
     {
         parent::boot();
-
-        static::creating(function ($model) {
-            if (empty($model->id)) {
-                $model->id = (string) Str::uuid();
+        
+        static::creating(function ($backup) {
+            if (empty($backup->id)) {
+                $backup->id = (string) Str::uuid();
+            }
+            $validDisks = ['local', 's3', 'b2', 'wasabi'];
+            if (!in_array($backup->storage_disk, $validDisks)) {
+                throw new \Exception("Invalid storage disk: {$backup->storage_disk}");
             }
         });
     }

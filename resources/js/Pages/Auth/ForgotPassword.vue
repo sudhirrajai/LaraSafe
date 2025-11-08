@@ -1,10 +1,15 @@
 <script setup>
 import { useForm, usePage } from '@inertiajs/vue3';
 import { useToast } from 'vue-toastification';
-import { ref, watch, onMounted } from 'vue';
+import { watch, onMounted } from 'vue';
 
 const toast = useToast();
 const page = usePage();
+
+const props = defineProps({
+  status: String,
+  errors: Object,
+});
 
 // Watch for flash messages
 watch(() => page.props.flash, (flash) => {
@@ -28,20 +33,19 @@ onMounted(() => {
 
 const form = useForm({
   email: '',
-  password: '',
-  remember: false,
 });
 
-const showPassword = ref(false);
-
 const submit = () => {
-  form.post('/login', {
+  form.post('/forgot-password', {
     preserveScroll: true,
+    onSuccess: () => {
+      form.reset();
+    },
     onError: (errors) => {
       if (errors.email) {
         toast.error(errors.email);
-      } else if (errors.password) {
-        toast.error(errors.password);
+      } else {
+        toast.error('Failed to send reset link. Please try again.');
       }
     },
   });
@@ -67,16 +71,19 @@ const clearError = (field) => {
                   <img src="/public/assets/images/logos/logo.png" alt="Logo" style="width: 300px;">
                 </a>
                 
-                <p class="text-center mb-4 fs-4">Welcome back! Please login to your account</p>
+                <div class="text-center mb-4">
+                  <h3 class="fw-bold">Forgot Password?</h3>
+                  <p class="text-muted">Enter your email and we'll send you a reset link</p>
+                </div>
 
-                <!-- Success Message -->
+                <!-- Success Message (Visual Feedback) -->
                 <div v-if="$page.props.flash?.success" class="alert alert-success alert-dismissible fade show" role="alert">
                   <i class="ti ti-circle-check me-2"></i>
                   {{ $page.props.flash.success }}
                   <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                 </div>
 
-                <!-- Error Message -->
+                <!-- Error Message (Visual Feedback) -->
                 <div v-if="$page.props.flash?.error" class="alert alert-danger alert-dismissible fade show" role="alert">
                   <i class="ti ti-alert-circle me-2"></i>
                   {{ $page.props.flash.error }}
@@ -84,7 +91,7 @@ const clearError = (field) => {
                 </div>
                 
                 <form @submit.prevent="submit">
-                  <div class="mb-3">
+                  <div class="mb-4">
                     <label for="email" class="form-label">Email Address</label>
                     <input 
                       type="email" 
@@ -101,61 +108,38 @@ const clearError = (field) => {
                     </div>
                   </div>
                   
-                  <div class="mb-4">
-                    <label for="password" class="form-label">Password</label>
-                    <div class="input-group">
-                      <input 
-                        :type="showPassword ? 'text' : 'password'" 
-                        v-model="form.password"
-                        class="form-control" 
-                        :class="{ 'is-invalid': form.errors.password }"
-                        id="password"
-                        placeholder="Enter your password"
-                        required
-                        @input="clearError('password')"
-                      >
-                      <button 
-                        class="btn btn-outline-secondary" 
-                        type="button"
-                        @click="showPassword = !showPassword"
-                      >
-                        <i :class="showPassword ? 'ti ti-eye-off' : 'ti ti-eye'"></i>
-                      </button>
-                    </div>
-                    <div v-if="form.errors.password" class="invalid-feedback d-block">
-                      {{ form.errors.password }}
-                    </div>
-                  </div>
-                  
-                  <div class="d-flex align-items-center justify-content-between mb-4">
-                    <div class="form-check">
-                      <input 
-                        class="form-check-input primary" 
-                        type="checkbox" 
-                        v-model="form.remember"
-                        id="flexCheckChecked"
-                      >
-                      <label class="form-check-label text-dark" for="flexCheckChecked">
-                        Remember this Device
-                      </label>
-                    </div>
-                    <a class="text-primary fw-bold" href="/forgot-password">Forgot Password?</a>
-                  </div>
-                  
                   <button 
                     type="submit" 
-                    class="btn btn-primary w-100 py-8 fs-4 mb-4 rounded-2"
+                    class="btn btn-primary w-100 py-8 fs-4 mb-3"
                     :disabled="form.processing"
                   >
                     <span v-if="form.processing">
                       <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                      Signing In...
+                      Sending Reset Link...
                     </span>
                     <span v-else>
-                      Sign In
+                      <i class="ti ti-mail me-2"></i>
+                      Send Reset Link
                     </span>
                   </button>
+
+                  <div class="text-center">
+                    <a href="/login" class="text-primary fw-semibold">
+                      <i class="ti ti-arrow-left me-1"></i>
+                      Back to Login
+                    </a>
+                  </div>
                 </form>
+
+                <!-- Info Box -->
+                <div class="alert alert-info mt-4" role="alert">
+                  <div class="d-flex">
+                    <i class="ti ti-info-circle me-2 fs-5"></i>
+                    <div>
+                      <strong>Note:</strong> The reset link will expire in 10 minutes for security reasons.
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -170,16 +154,14 @@ const clearError = (field) => {
   vertical-align: middle;
 }
 
-.input-group .btn {
-  border-color: #dee2e6;
-}
-
-.input-group .btn:hover {
-  background-color: #f8f9fa;
-}
-
 .alert {
   border-radius: 8px;
+}
+
+.alert-info {
+  background-color: #e7f3ff;
+  border-color: #bee5eb;
+  color: #0c5460;
 }
 
 .alert-success {

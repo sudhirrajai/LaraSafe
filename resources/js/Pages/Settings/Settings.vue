@@ -118,18 +118,14 @@ const saveSettings = async (type) => {
         
         // Handle sensitive fields based on type
         if (type === 's3') {
-            // If secret_key hasn't been modified and is masked, don't send it
             if (!sensitiveFieldsModified.value.s3.secret_key && isMaskedValue(dataToSend.secret_key)) {
                 // Keep the masked value - backend will handle it
-                // Or you can remove it and backend will use existing value
             }
         } else if (type === 'b2') {
-            // If app_key hasn't been modified and is masked, keep it
             if (!sensitiveFieldsModified.value.b2.app_key && isMaskedValue(dataToSend.app_key)) {
                 // Keep the masked value - backend will handle it
             }
         } else if (type === 'wasabi') {
-            // If secret_key hasn't been modified and is masked, keep it
             if (!sensitiveFieldsModified.value.wasabi.secret_key && isMaskedValue(dataToSend.secret_key)) {
                 // Keep the masked value - backend will handle it
             }
@@ -251,21 +247,38 @@ const getPlaceholder = (type, field) => {
 
                     <!-- S3 Configuration -->
                     <div v-if="activeTab === 'S3'" class="config-section">
+                        <div class="alert alert-info mb-4">
+                            <i class="ti ti-info-circle me-2"></i>
+                            <strong>Amazon S3 Configuration:</strong>
+                            <ul class="mb-0 mt-2">
+                                <li>Log into <a href="https://console.aws.amazon.com/iam/" target="_blank" class="text-primary">AWS IAM Console</a></li>
+                                <li>Create a new IAM user with <strong>Programmatic access</strong></li>
+                                <li>Attach policy: <code>AmazonS3FullAccess</code> (or custom policy)</li>
+                                <li>Copy the <strong>Access Key ID</strong> and <strong>Secret Access Key</strong></li>
+                                <li>Bucket must already exist in your chosen region</li>
+                                <li>Region format: <code>us-east-1</code>, <code>eu-west-1</code>, etc.</li>
+                            </ul>
+                        </div>
                         <form @submit.prevent="saveSettings('s3')">
                             <div class="row g-3 g-md-4">
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Access Key</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Access Key ID
+                                        <i class="ti ti-info-circle text-muted" title="Your AWS Access Key ID"></i>
+                                    </label>
                                     <input
                                         v-model="settings.s3.access_key"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="AKIAIOSFODNN7EXAMPLE"
                                         :disabled="saving"
                                         required
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
                                     <label class="form-label text-dark mb-2">
-                                        Secret Key
+                                        Secret Access Key
+                                        <i class="ti ti-info-circle text-muted" title="Your AWS Secret Access Key"></i>
                                         <span v-if="isMaskedValue(settings.s3.secret_key)" class="text-muted small">
                                             (currently saved)
                                         </span>
@@ -283,25 +296,33 @@ const getPlaceholder = (type, field) => {
                                     </small>
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Bucket</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Bucket Name
+                                        <i class="ti ti-info-circle text-muted" title="Your S3 bucket name"></i>
+                                    </label>
                                     <input
                                         v-model="settings.s3.bucket"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="my-backup-bucket"
                                         :disabled="saving"
                                         required
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Region</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Region
+                                        <i class="ti ti-info-circle text-muted" title="AWS region where your bucket exists"></i>
+                                    </label>
                                     <input
                                         v-model="settings.s3.region"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
-                                        placeholder="e.g., us-east-1"
+                                        placeholder="us-east-1"
                                         :disabled="saving"
                                         required
                                     />
+                                    <small class="text-muted">Examples: us-east-1, eu-west-1, ap-south-1</small>
                                 </div>
                                 <div class="col-12 mt-3 mt-md-4">
                                     <div class="d-flex flex-column flex-sm-row gap-2">
@@ -342,10 +363,14 @@ const getPlaceholder = (type, field) => {
                             <i class="ti ti-info-circle me-2"></i>
                             <strong>Backblaze B2 Configuration:</strong>
                             <ul class="mb-0 mt-2">
-                                <li>Use your <strong>Application Key ID</strong> (not Master Key)</li>
-                                <li>Use your <strong>Application Key</strong> (not Master Key)</li>
-                                <li>Bucket must be the <strong>bucket name</strong> (e.g., "larasafe")</li>
-                                <li>Endpoint format: <code>https://s3.{region}.backblazeb2.com</code></li>
+                                <li>Log into <a href="https://secure.backblaze.com/b2_buckets.htm" target="_blank" class="text-primary">Backblaze Console</a></li>
+                                <li>Create a bucket or select existing one</li>
+                                <li>Go to <strong>App Keys</strong> → Create new Application Key</li>
+                                <li>Use <strong>Application Key ID</strong> (not Master Key ID)</li>
+                                <li>Use <strong>Application Key</strong> (not Master Key)</li>
+                                <li>Bucket name: The bucket name (e.g., "larasafe"), not bucket ID</li>
+                                <li>Endpoint: Found in bucket details → <strong>S3 Endpoint</strong></li>
+                                <li>Format: <code>https://s3.{region}.backblazeb2.com</code></li>
                             </ul>
                         </div>
                         <form @submit.prevent="saveSettings('b2')">
@@ -359,6 +384,7 @@ const getPlaceholder = (type, field) => {
                                         v-model="settings.b2.key_id"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="0050123456789abc0000000001"
                                         :disabled="saving"
                                         required
                                     />
@@ -392,14 +418,14 @@ const getPlaceholder = (type, field) => {
                                         v-model="settings.b2.bucket"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
-                                        placeholder="e.g., larasafe"
+                                        placeholder="larasafe"
                                         :disabled="saving"
                                         required
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
                                     <label class="form-label text-dark mb-2">
-                                        Endpoint
+                                        S3 Endpoint
                                         <i class="ti ti-info-circle text-muted" title="Full S3-compatible endpoint URL"></i>
                                     </label>
                                     <input
@@ -410,7 +436,7 @@ const getPlaceholder = (type, field) => {
                                         :disabled="saving"
                                         required
                                     />
-                                    <small class="text-muted">Found in your B2 bucket details</small>
+                                    <small class="text-muted">Found in your B2 bucket details under "Endpoint"</small>
                                 </div>
                                 <div class="col-12 mt-3 mt-md-4">
                                     <div class="d-flex flex-column flex-sm-row gap-2">
@@ -447,14 +473,31 @@ const getPlaceholder = (type, field) => {
 
                     <!-- Wasabi Configuration -->
                     <div v-if="activeTab === 'Wasabi'" class="config-section">
+                        <div class="alert alert-info mb-4">
+                            <i class="ti ti-info-circle me-2"></i>
+                            <strong>Wasabi Configuration:</strong>
+                            <ul class="mb-0 mt-2">
+                                <li>Log into <a href="https://console.wasabisys.com/" target="_blank" class="text-primary">Wasabi Console</a></li>
+                                <li>Go to <strong>Access Keys</strong> → Create new Access Key</li>
+                                <li>Copy the <strong>Access Key</strong> and <strong>Secret Key</strong></li>
+                                <li>Create or select a bucket in your desired region</li>
+                                <li>Region examples: <code>us-east-1</code>, <code>eu-central-1</code></li>
+                                <li>Endpoint format: <code>https://s3.{region}.wasabisys.com</code></li>
+                                <li>Note: Wasabi uses S3-compatible API</li>
+                            </ul>
+                        </div>
                         <form @submit.prevent="saveSettings('wasabi')">
                             <div class="row g-3 g-md-4">
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Access Key</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Access Key
+                                        <i class="ti ti-info-circle text-muted" title="Your Wasabi Access Key"></i>
+                                    </label>
                                     <input
                                         v-model="settings.wasabi.access_key"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="ABCDEFGHIJKLMNOPQRST"
                                         :disabled="saving"
                                         required
                                     />
@@ -462,6 +505,7 @@ const getPlaceholder = (type, field) => {
                                 <div class="col-12 col-md-6">
                                     <label class="form-label text-dark mb-2">
                                         Secret Key
+                                        <i class="ti ti-info-circle text-muted" title="Your Wasabi Secret Key"></i>
                                         <span v-if="isMaskedValue(settings.wasabi.secret_key)" class="text-muted small">
                                             (currently saved)
                                         </span>
@@ -479,25 +523,33 @@ const getPlaceholder = (type, field) => {
                                     </small>
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Bucket</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Bucket Name
+                                        <i class="ti ti-info-circle text-muted" title="Your Wasabi bucket name"></i>
+                                    </label>
                                     <input
                                         v-model="settings.wasabi.bucket"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="my-backups"
                                         :disabled="saving"
                                         required
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Region</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Region
+                                        <i class="ti ti-info-circle text-muted" title="Wasabi region where your bucket exists"></i>
+                                    </label>
                                     <input
                                         v-model="settings.wasabi.region"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
-                                        placeholder="e.g., us-east-1"
+                                        placeholder="us-east-1"
                                         :disabled="saving"
                                         required
                                     />
+                                    <small class="text-muted">Examples: us-east-1, eu-central-1, ap-northeast-1</small>
                                 </div>
                                 <div class="col-12 mt-3 mt-md-4">
                                     <div class="d-flex flex-column flex-sm-row gap-2">
@@ -538,7 +590,6 @@ const getPlaceholder = (type, field) => {
 </template>
 
 <style scoped>
-/* All your existing styles remain the same */
 .tabs-container {
     display: flex;
     gap: 0.5rem;
@@ -664,5 +715,24 @@ const getPlaceholder = (type, field) => {
     background-color: #bbdefb;
     padding: 2px 6px;
     border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+}
+
+.alert-info a {
+    font-weight: 600;
+    text-decoration: underline;
+}
+
+.alert-info a:hover {
+    text-decoration: none;
+}
+
+.alert-info ul {
+    padding-left: 1.5rem;
+}
+
+.alert-info ul li {
+    margin-bottom: 0.5rem;
 }
 </style>

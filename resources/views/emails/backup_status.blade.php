@@ -123,7 +123,7 @@
                 @endif
             </div>
             <div class="footer">
-                Thank you,<br>Backup System<br>
+                Thank you,<br>LaraSafe<br>
                 &copy; 2025 Sudhir Rajai. All rights reserved.
             </div>
         </div>
