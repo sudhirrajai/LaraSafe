@@ -306,42 +306,48 @@ class BackupController extends Controller
             foreach ($backup->createdBackups as $createdBackup) {
                 try {
                     $freedSpace += $createdBackup->size ?? 0;
-
                     $filePath = $createdBackup->file_path;
                     $disk = $createdBackup->storage_disk ?? 'local';
                     $deleted = false;
 
                     if ($filePath) {
-                        // Try Laravel Storage
-                        if (Storage::disk($disk)->exists($filePath)) {
-                            $deleted = Storage::disk($disk)->delete($filePath);
+                        if ($disk === 'local') {
+                            // Handle local storage deletion
+                            $deleted = $this->deleteLocalFile($filePath);
+                        } else {
+                            // Handle cloud storage deletion (S3, B2, Wasabi, etc.)
+                            $deleted = $this->storageService->deleteFile($disk, $filePath);
+                            
+                            \Log::info("Cloud storage deletion attempt", [
+                                'disk' => $disk,
+                                'path' => $filePath,
+                                'success' => $deleted
+                            ]);
                         }
-
-                        // Fallback: Direct delete
-                        $fullPath = storage_path("app/{$filePath}");
-                        if (!$deleted && file_exists($fullPath)) {
-                            $deleted = @unlink($fullPath);
-                        }
-
-                        // Final: Public link
-                        if (!$deleted) {
-                            $publicPath = public_path("storage/{$filePath}");
-                            if (file_exists($publicPath)) {
-                                $deleted = @unlink($publicPath);
-                            }
-                        }
-                    } else {
-                        $deleted = true;
                     }
 
                     if ($deleted) {
                         $deletedFiles++;
+                        \Log::info("Successfully deleted backup file", [
+                            'id' => $createdBackup->id,
+                            'path' => $filePath,
+                            'disk' => $disk
+                        ]);
                     } else {
                         $failedFiles++;
+                        \Log::warning("Failed to delete backup file", [
+                            'id' => $createdBackup->id,
+                            'path' => $filePath,
+                            'disk' => $disk
+                        ]);
                     }
                 } catch (\Exception $e) {
                     $failedFiles++;
-                    \Log::error("File delete error", ['error' => $e->getMessage()]);
+                    \Log::error("Exception while deleting backup file", [
+                        'id' => $createdBackup->id,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
                 }
             }
 
@@ -356,7 +362,7 @@ class BackupController extends Controller
                 $message .= " Removed {$deletedFiles} backup files (" . $this->formatBytes($freedSpace) . " freed).";
             }
             if ($failedFiles > 0) {
-                $message .= " Warning: {$failedFiles} files could not be deleted.";
+                $message .= " Warning: {$failedFiles} files could not be deleted from storage.";
             }
 
             return redirect()->back()->with('success', $message);
@@ -365,7 +371,8 @@ class BackupController extends Controller
 
             \Log::error("Error deleting backup: {$backup->file_name}", [
                 'backup_id' => $backup->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
 
             return redirect()->back()->with('error', 'Failed to delete backup. Please try again.');
@@ -387,51 +394,34 @@ class BackupController extends Controller
             $storageDisk = $createdBackup->storage_disk ?? 'local';
 
             $fileDeleted = false;
-            $deletedVia = 'none';
 
             if ($filePath) {
                 if ($storageDisk === 'local') {
                     // Local storage deletion
-                    if (Storage::disk('local')->exists($filePath)) {
-                        if (Storage::disk('local')->delete($filePath)) {
-                            $fileDeleted = true;
-                            $deletedVia = 'laravel-storage';
-                        }
-                    }
-
-                    if (!$fileDeleted) {
-                        $fullPath = storage_path("app/{$filePath}");
-                        if (file_exists($fullPath) && unlink($fullPath)) {
-                            $fileDeleted = true;
-                            $deletedVia = 'direct-unlink';
-                        }
-                    }
-
-                    if (!$fileDeleted) {
-                        $publicPath = public_path("storage/{$filePath}");
-                        if (file_exists($publicPath) && unlink($publicPath)) {
-                            $fileDeleted = true;
-                            $deletedVia = 'public-storage';
-                        }
-                    }
+                    $fileDeleted = $this->deleteLocalFile($filePath);
                 } else {
                     // Cloud storage deletion
                     $fileDeleted = $this->storageService->deleteFile($storageDisk, $filePath);
-                    $deletedVia = $fileDeleted ? 'cloud-storage' : 'failed';
+                    
+                    \Log::info("Cloud backup file deletion", [
+                        'id' => $id,
+                        'disk' => $storageDisk,
+                        'path' => $filePath,
+                        'success' => $fileDeleted
+                    ]);
                 }
             } else {
-                $fileDeleted = true;
-                $deletedVia = 'no-path';
+                $fileDeleted = true; // No file path, consider it deleted
             }
 
             // Delete DB record
             $createdBackup->delete();
 
-            \Log::info("Backup file deleted", [
+            \Log::info("Backup record deleted", [
                 'id' => $id,
                 'file' => $filePath,
                 'disk' => $storageDisk,
-                'method' => $deletedVia,
+                'file_deleted' => $fileDeleted,
                 'size' => $size
             ]);
 
@@ -455,7 +445,8 @@ class BackupController extends Controller
         } catch (\Exception $e) {
             \Log::error("Failed to delete backup file", [
                 'id' => $id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
 
             $errorMessage = 'Failed to delete backup: ' . $e->getMessage();
@@ -786,6 +777,82 @@ class BackupController extends Controller
         $result = $this->storageService->testConnection($request->storage_type);
 
         return response()->json($result);
+    }
+
+    /**
+     * Helper method to delete local files with multiple fallback attempts
+    */
+    private function deleteLocalFile(string $filePath): bool
+    {
+        $attempts = [
+            // Attempt 1: Laravel Storage facade
+            function($path) {
+                if (Storage::disk('local')->exists($path)) {
+                    return Storage::disk('local')->delete($path);
+                }
+                return false;
+            },
+            // Attempt 2: Direct filesystem with storage_path
+            function($path) {
+                $fullPath = storage_path("app/{$path}");
+                if (file_exists($fullPath)) {
+                    return @unlink($fullPath);
+                }
+                return false;
+            },
+            // Attempt 3: Try without 'private/' prefix if it exists
+            function($path) {
+                $altPath = str_replace('private/', '', $path);
+                $fullPath = storage_path("app/{$altPath}");
+                if (file_exists($fullPath)) {
+                    return @unlink($fullPath);
+                }
+                return false;
+            },
+            // Attempt 4: Try with 'private/' prefix if not exists
+            function($path) {
+                if (!str_starts_with($path, 'private/')) {
+                    $altPath = "private/{$path}";
+                    $fullPath = storage_path("app/{$altPath}");
+                    if (file_exists($fullPath)) {
+                        return @unlink($fullPath);
+                    }
+                }
+                return false;
+            },
+            // Attempt 5: Public storage
+            function($path) {
+                $publicPath = public_path("storage/{$path}");
+                if (file_exists($publicPath)) {
+                    return @unlink($publicPath);
+                }
+                return false;
+            }
+        ];
+
+        foreach ($attempts as $index => $attempt) {
+            try {
+                if ($attempt($filePath)) {
+                    \Log::info("File deleted successfully", [
+                        'path' => $filePath,
+                        'attempt' => $index + 1
+                    ]);
+                    return true;
+                }
+            } catch (\Exception $e) {
+                \Log::debug("Delete attempt failed", [
+                    'path' => $filePath,
+                    'attempt' => $index + 1,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+
+        \Log::warning("All deletion attempts failed for local file", [
+            'path' => $filePath
+        ]);
+        
+        return false;
     }
 
 }

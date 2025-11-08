@@ -171,6 +171,20 @@ const isValid = computed(() => {
   return !Object.values(errors.value).some(error => error !== '')
 })
 
+// Computed property to show database source info
+const dbSourceInfo = computed(() => {
+  switch (form.db_source) {
+    case 'env':
+      return 'Will use database credentials from project\'s .env file'
+    case 'project_config':
+      return 'Will use database credentials stored in project configuration'
+    case 'custom':
+      return 'Use custom database credentials for this backup'
+    default:
+      return ''
+  }
+})
+
 /* ---- Submit ---- */
 const handleSubmit = () => {
   // mark touched for validation
@@ -322,22 +336,57 @@ const testDatabaseConnection = () => {
               </div>
             </div>
 
-            <!-- Storage Disk -->
-            <div class="mb-3">
-              <label for="storageDisk" class="form-label">Storage Disk</label>
-              <select
-                class="form-select"
-                id="storageDisk"
-                v-model="form.storage_disk"
-                @blur="touched.storage_disk = true"
-                :class="{ 'is-invalid': errors.storage_disk && touched.storage_disk }"
-              >
-                <option value="local">Local</option>
-                <option value="s3">S3</option>
-                <option value="other">Other Cloud Storage</option>
-              </select>
-              <div v-if="errors.storage_disk && touched.storage_disk" class="invalid-feedback">
+            <!-- Storage Location - Same Design as CreateBackup -->
+            <div class="mb-4">
+              <label class="form-label fw-bold">Where to Store Backup</label>
+
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="radio" id="storeLocal" value="local"
+                  v-model="form.storage_disk">
+                <label class="form-check-label" for="storeLocal">
+                  <strong>Local Storage</strong>
+                  <small class="d-block text-muted">Store backups on the same server (default)</small>
+                </label>
+              </div>
+
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="radio" id="storeS3" value="s3"
+                  v-model="form.storage_disk">
+                <label class="form-check-label" for="storeS3">
+                  <strong>Amazon S3</strong>
+                  <small class="d-block text-muted">Store securely on Amazon S3 bucket</small>
+                </label>
+              </div>
+
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="radio" id="storeB2" value="b2"
+                  v-model="form.storage_disk">
+                <label class="form-check-label" for="storeB2">
+                  <strong>Backblaze B2</strong>
+                  <small class="d-block text-muted">Low-cost and reliable object storage</small>
+                </label>
+              </div>
+
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="radio" id="storeWasabi" value="wasabi"
+                  v-model="form.storage_disk">
+                <label class="form-check-label" for="storeWasabi">
+                  <strong>Wasabi Cloud</strong>
+                  <small class="d-block text-muted">Fast S3-compatible storage service</small>
+                </label>
+              </div>
+
+              <div v-if="errors.storage_disk && touched.storage_disk" class="invalid-feedback d-block">
                 {{ errors.storage_disk }}
+              </div>
+
+              <!-- Optional Info Box -->
+              <div v-if="form.storage_disk" class="alert alert-info mt-2">
+                <i class="ti ti-info-circle me-2"></i>
+                <span v-if="form.storage_disk === 'local'">Backups will be stored locally on the same server.</span>
+                <span v-else-if="form.storage_disk === 's3'">Backups will be uploaded to Amazon S3. Ensure your keys are configured in Cloud Settings.</span>
+                <span v-else-if="form.storage_disk === 'b2'">Backups will be uploaded to Backblaze B2 cloud storage.</span>
+                <span v-else-if="form.storage_disk === 'wasabi'">Backups will be uploaded to Wasabi cloud storage.</span>
               </div>
             </div>
 
@@ -395,7 +444,7 @@ const testDatabaseConnection = () => {
                     </div>
                     <div class="alert alert-info mt-2">
                       <i class="ti ti-info-circle me-2"></i>
-                      {{ form.db_source === 'env' ? "Will use database credentials from project's .env file" : form.db_source === 'project_config' ? 'Will use database credentials stored in project configuration' : 'Use custom database credentials for this backup' }}
+                      {{ dbSourceInfo }}
                     </div>
                   </div>
 
@@ -633,9 +682,5 @@ const testDatabaseConnection = () => {
 
 .btn-link {
   font-size: 0.9rem;
-}
-
-.text-danger {
-  font-size: 0.85rem;
 }
 </style>
