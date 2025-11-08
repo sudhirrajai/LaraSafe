@@ -4,7 +4,6 @@ import { useForm, router } from '@inertiajs/vue3'
 import { ref, computed, watch } from 'vue'
 import axios from 'axios'
 
-// SweetAlert2 (must be loaded globally)
 const Swal = window.Swal
 
 defineOptions({
@@ -25,7 +24,7 @@ const form = useForm({
   frequency: null,
   time: null,
   include_database: false,
-  db_source: 'env', // env, custom, project_config
+  db_source: 'env',
   db_host: '',
   db_port: '3306',
   db_name: '',
@@ -33,6 +32,8 @@ const form = useForm({
   db_password: '',
   db_tables: 'all',
   selected_tables: '',
+  auto_delete_enabled: false,
+  auto_delete_after_days: 7,
 })
 
 const touched = ref({
@@ -47,7 +48,6 @@ const touched = ref({
   db_password: false,
 })
 
-/* If BOTH frequency and time exist, treat auto backup as enabled */
 const autoBackupEnabled = ref(false)
 const showAdvancedDb = ref(false)
 
@@ -61,20 +61,20 @@ watch(
     form.file_name = b.file_name || ''
     form.storage_disk = b.storage_disk || 'local'
     form.frequency = b.backup_frequency ?? b.frequency ?? null
-    // Normalize time to "HH:MM" if available
     form.time = (b.backup_time ?? b.time) ? String((b.backup_time ?? b.time)).substr(0,5) : null
 
-    // include_database may be stored as 0/1 or boolean
     form.include_database = !!(b.include_database || b.include_database === 1)
 
-    // autoBackupEnabled should be true only if both frequency and time have values
+    // Load auto-delete settings
+    form.auto_delete_enabled = !!(b.auto_delete_enabled || b.auto_delete_enabled === 1)
+    form.auto_delete_after_days = b.auto_delete_after_days || 7
+
     autoBackupEnabled.value = !!(form.frequency && form.time)
 
     if (b.database_config) {
       form.db_source = b.database_config.source || 'env'
       form.db_tables = b.database_config.tables || 'all'
 
-      // if selected_tables is array -> join to string, else use as-is
       if (b.database_config.selected_tables) {
         form.selected_tables = Array.isArray(b.database_config.selected_tables)
           ? b.database_config.selected_tables.join(', ')
@@ -83,15 +83,13 @@ watch(
         form.selected_tables = ''
       }
 
-      // credentials should already be decrypted by controller and be an object
       if (b.database_config.credentials && typeof b.database_config.credentials === 'object') {
         const creds = b.database_config.credentials
         form.db_host = creds.host || ''
         form.db_port = creds.port || '3306'
         form.db_name = creds.database || ''
         form.db_username = creds.username || ''
-        // For security we do not pre-fill password field with the actual value
-        form.db_password = '' 
+        form.db_password = ''
       } else {
         form.db_host = ''
         form.db_port = '3306'
@@ -100,7 +98,6 @@ watch(
         form.db_password = ''
       }
     } else {
-      // Reset DB fields if there is no db config
       form.db_source = 'env'
       form.db_tables = 'all'
       form.selected_tables = ''
@@ -114,25 +111,19 @@ watch(
   { immediate: true }
 )
 
-/* ---- Keep autoBackupEnabled in sync with frequency/time changes ---- */
 watch([() => form.frequency, () => form.time], ([f, t]) => {
-  // if both have values, ensure toggle is on
   if (f && t) {
     autoBackupEnabled.value = true
   } else {
-    // don't automatically turn off if user explicitly enabled toggle,
-    // but keep this simple: if either is missing, keep toggle false so UI matches saved state
     autoBackupEnabled.value = false
   }
 })
 
-/* If user toggles the autoBackup switch off, clear freq/time locally (optional) */
 watch(autoBackupEnabled, (val) => {
   if (!val) {
     form.frequency = null
     form.time = null
   } else {
-    // if enabled and there was no value, set sensible defaults
     if (!form.frequency) form.frequency = 'daily'
     if (!form.time) form.time = form.time || new Date().toISOString().substr(11,5)
   }
@@ -171,7 +162,6 @@ const isValid = computed(() => {
   return !Object.values(errors.value).some(error => error !== '')
 })
 
-// Computed property to show database source info
 const dbSourceInfo = computed(() => {
   switch (form.db_source) {
     case 'env':
@@ -187,7 +177,6 @@ const dbSourceInfo = computed(() => {
 
 /* ---- Submit ---- */
 const handleSubmit = () => {
-  // mark touched for validation
   Object.keys(touched.value).forEach(key => touched.value[key] = true)
 
   if (!isValid.value) {
@@ -228,6 +217,14 @@ const handleSubmit = () => {
     }
   }
 
+  // Add auto-delete fields
+  if (form.auto_delete_enabled) {
+    data.auto_delete_enabled = true
+    data.auto_delete_after_days = form.auto_delete_after_days
+  } else {
+    data.auto_delete_enabled = false
+  }
+
   form.put(`/backups/update-backup/${backup.id}`, {
     data,
     onSuccess: (page) => {
@@ -254,7 +251,6 @@ const handleSubmit = () => {
   })
 }
 
-/* ---- Test Database Connection ---- */
 const testDatabaseConnection = () => {
   if (form.db_source !== 'custom') return
 
@@ -336,7 +332,7 @@ const testDatabaseConnection = () => {
               </div>
             </div>
 
-            <!-- Storage Location - Same Design as CreateBackup -->
+            <!-- Storage Location -->
             <div class="mb-4">
               <label class="form-label fw-bold">Where to Store Backup</label>
 
@@ -380,7 +376,6 @@ const testDatabaseConnection = () => {
                 {{ errors.storage_disk }}
               </div>
 
-              <!-- Optional Info Box -->
               <div v-if="form.storage_disk" class="alert alert-info mt-2">
                 <i class="ti ti-info-circle me-2"></i>
                 <span v-if="form.storage_disk === 'local'">Backups will be stored locally on the same server.</span>
@@ -396,7 +391,6 @@ const testDatabaseConnection = () => {
                 <div class="card-header bg-light">
                   <div class="form-check form-switch">
                     <input type="hidden" name="include_database" :value="0" />
-
                     <input
                       type="checkbox"
                       class="form-check-input"
@@ -411,7 +405,6 @@ const testDatabaseConnection = () => {
                 </div>
 
                 <div v-if="form.include_database" class="card-body">
-                  <!-- Database Source Selection -->
                   <div class="mb-3">
                     <label class="form-label">Database Credentials Source</label>
                     <div class="form-check">
@@ -448,7 +441,6 @@ const testDatabaseConnection = () => {
                     </div>
                   </div>
 
-                  <!-- Custom Database Credentials -->
                   <div v-if="form.db_source === 'custom'" class="border rounded p-3 bg-light mb-3">
                     <h6 class="mb-3">Database Connection Details</h6>
                     <div class="row">
@@ -532,7 +524,6 @@ const testDatabaseConnection = () => {
                     </button>
                   </div>
 
-                  <!-- Advanced Database Options -->
                   <div class="mb-3">
                     <button
                       type="button"
@@ -586,6 +577,56 @@ const testDatabaseConnection = () => {
                         </div>
                       </div>
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Auto Delete Section -->
+            <div class="mb-4">
+              <div class="card border-warning">
+                <div class="card-header bg-light">
+                  <div class="form-check form-switch">
+                    <input type="checkbox" class="form-check-input" id="autoDeleteToggle"
+                      v-model="form.auto_delete_enabled">
+                    <label class="form-check-label fw-bold" for="autoDeleteToggle">
+                      <i class="ti ti-trash-x me-2"></i>
+                      Auto-Delete Old Backups
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="form.auto_delete_enabled" class="card-body">
+                  <div class="alert alert-warning">
+                    <i class="ti ti-alert-triangle me-2"></i>
+                    <strong>Warning:</strong> Backups older than the specified period will be automatically deleted to save storage space.
+                  </div>
+
+                  <div class="mb-3">
+                    <label for="autoDeleteDays" class="form-label">Delete Backups Older Than</label>
+                    <select class="form-select" id="autoDeleteDays" v-model.number="form.auto_delete_after_days">
+                      <option :value="7">7 days (1 week)</option>
+                      <option :value="14">14 days (2 weeks)</option>
+                      <option :value="30">30 days (1 month)</option>
+                      <option :value="60">60 days (2 months)</option>
+                      <option :value="90">90 days (3 months)</option>
+                      <option :value="180">180 days (6 months)</option>
+                      <option :value="365">365 days (1 year)</option>
+                    </select>
+                    <small class="form-text text-muted">
+                      Backups created more than {{ form.auto_delete_after_days }} days ago will be automatically removed
+                    </small>
+                  </div>
+
+                  <div class="alert alert-info">
+                    <i class="ti ti-info-circle me-2"></i>
+                    <strong>How it works:</strong>
+                    <ul class="mb-0 mt-2">
+                      <li>The system checks for old backups daily at 2 AM</li>
+                      <li>Only backups older than your specified period are deleted</li>
+                      <li>Both the backup files and database records are removed</li>
+                      <li>You can change this setting anytime</li>
+                    </ul>
                   </div>
                 </div>
               </div>
