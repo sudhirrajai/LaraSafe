@@ -1,6 +1,6 @@
 <script setup>
 import MainLayout from '@/Layouts/MainLayout.vue'
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import axios from 'axios'
 import { Link } from '@inertiajs/vue3'
 import Swal from 'sweetalert2'
@@ -36,9 +36,46 @@ const settings = ref({
     wasabi: { access_key: '', secret_key: '', bucket: '', region: '' }
 })
 
+// Track original masked values
+const originalMaskedValues = ref({
+    s3: { secret_key: null },
+    b2: { app_key: null },
+    wasabi: { secret_key: null }
+})
+
+// Track if sensitive fields have been modified
+const sensitiveFieldsModified = ref({
+    s3: { secret_key: false },
+    b2: { app_key: false },
+    wasabi: { secret_key: false }
+})
+
 onMounted(async () => {
     await loadSettings()
 })
+
+// Watch for changes in sensitive fields
+watch(() => settings.value.s3.secret_key, (newVal) => {
+    if (originalMaskedValues.value.s3.secret_key && newVal !== originalMaskedValues.value.s3.secret_key) {
+        sensitiveFieldsModified.value.s3.secret_key = true
+    }
+})
+
+watch(() => settings.value.b2.app_key, (newVal) => {
+    if (originalMaskedValues.value.b2.app_key && newVal !== originalMaskedValues.value.b2.app_key) {
+        sensitiveFieldsModified.value.b2.app_key = true
+    }
+})
+
+watch(() => settings.value.wasabi.secret_key, (newVal) => {
+    if (originalMaskedValues.value.wasabi.secret_key && newVal !== originalMaskedValues.value.wasabi.secret_key) {
+        sensitiveFieldsModified.value.wasabi.secret_key = true
+    }
+})
+
+const isMaskedValue = (value) => {
+    return value && value.includes('*')
+}
 
 const loadSettings = async () => {
     loading.value = true
@@ -47,12 +84,21 @@ const loadSettings = async () => {
         if (response.data) {
             if (response.data.s3) {
                 settings.value.s3 = { ...settings.value.s3, ...response.data.s3 }
+                if (isMaskedValue(response.data.s3.secret_key)) {
+                    originalMaskedValues.value.s3.secret_key = response.data.s3.secret_key
+                }
             }
             if (response.data.b2) {
                 settings.value.b2 = { ...settings.value.b2, ...response.data.b2 }
+                if (isMaskedValue(response.data.b2.app_key)) {
+                    originalMaskedValues.value.b2.app_key = response.data.b2.app_key
+                }
             }
             if (response.data.wasabi) {
                 settings.value.wasabi = { ...settings.value.wasabi, ...response.data.wasabi }
+                if (isMaskedValue(response.data.wasabi.secret_key)) {
+                    originalMaskedValues.value.wasabi.secret_key = response.data.wasabi.secret_key
+                }
             }
         }
     } catch (error) {
@@ -68,12 +114,38 @@ const loadSettings = async () => {
 const saveSettings = async (type) => {
     saving.value = true
     try {
-        const response = await axios.post(`/settings/${type}`, settings.value[type])
+        const dataToSend = { ...settings.value[type] }
+        
+        // Handle sensitive fields based on type
+        if (type === 's3') {
+            if (!sensitiveFieldsModified.value.s3.secret_key && isMaskedValue(dataToSend.secret_key)) {
+                // Keep the masked value - backend will handle it
+            }
+        } else if (type === 'b2') {
+            if (!sensitiveFieldsModified.value.b2.app_key && isMaskedValue(dataToSend.app_key)) {
+                // Keep the masked value - backend will handle it
+            }
+        } else if (type === 'wasabi') {
+            if (!sensitiveFieldsModified.value.wasabi.secret_key && isMaskedValue(dataToSend.secret_key)) {
+                // Keep the masked value - backend will handle it
+            }
+        }
+
+        const response = await axios.post(`/settings/${type}`, dataToSend)
 
         Toast.fire({
             icon: 'success',
             title: response.data.message || 'Settings saved successfully!'
         })
+        
+        // Reset modification tracking
+        if (type === 's3') {
+            sensitiveFieldsModified.value.s3.secret_key = false
+        } else if (type === 'b2') {
+            sensitiveFieldsModified.value.b2.app_key = false
+        } else if (type === 'wasabi') {
+            sensitiveFieldsModified.value.wasabi.secret_key = false
+        }
         
         // Reload settings to get masked values
         await loadSettings()
@@ -106,6 +178,21 @@ const testConnection = async (type) => {
     } finally {
         testing.value = false
     }
+}
+
+// Show placeholder text for masked fields
+const getPlaceholder = (type, field) => {
+    const maskedValues = {
+        s3: { secret_key: originalMaskedValues.value.s3.secret_key },
+        b2: { app_key: originalMaskedValues.value.b2.app_key },
+        wasabi: { secret_key: originalMaskedValues.value.wasabi.secret_key }
+    }
+    
+    if (maskedValues[type] && maskedValues[type][field]) {
+        return 'Leave unchanged or enter new value'
+    }
+    
+    return ''
 }
 </script>
 
@@ -160,48 +247,82 @@ const testConnection = async (type) => {
 
                     <!-- S3 Configuration -->
                     <div v-if="activeTab === 'S3'" class="config-section">
+                        <div class="alert alert-info mb-4">
+                            <i class="ti ti-info-circle me-2"></i>
+                            <strong>Amazon S3 Configuration:</strong>
+                            <ul class="mb-0 mt-2">
+                                <li>Log into <a href="https://console.aws.amazon.com/iam/" target="_blank" class="text-primary">AWS IAM Console</a></li>
+                                <li>Create a new IAM user with <strong>Programmatic access</strong></li>
+                                <li>Attach policy: <code>AmazonS3FullAccess</code> (or custom policy)</li>
+                                <li>Copy the <strong>Access Key ID</strong> and <strong>Secret Access Key</strong></li>
+                                <li>Bucket must already exist in your chosen region</li>
+                                <li>Region format: <code>us-east-1</code>, <code>eu-west-1</code>, etc.</li>
+                            </ul>
+                        </div>
                         <form @submit.prevent="saveSettings('s3')">
                             <div class="row g-3 g-md-4">
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Access Key</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Access Key ID
+                                        <i class="ti ti-info-circle text-muted" title="Your AWS Access Key ID"></i>
+                                    </label>
                                     <input
                                         v-model="settings.s3.access_key"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="AKIAIOSFODNN7EXAMPLE"
                                         :disabled="saving"
                                         required
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Secret Key</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Secret Access Key
+                                        <i class="ti ti-info-circle text-muted" title="Your AWS Secret Access Key"></i>
+                                        <span v-if="isMaskedValue(settings.s3.secret_key)" class="text-muted small">
+                                            (currently saved)
+                                        </span>
+                                    </label>
                                     <input
                                         v-model="settings.s3.secret_key"
                                         type="password"
                                         class="form-control border rounded p-2 p-md-3"
+                                        :placeholder="getPlaceholder('s3', 'secret_key')"
                                         :disabled="saving"
-                                        required
+                                        :required="!isMaskedValue(originalMaskedValues.s3.secret_key)"
                                     />
+                                    <small v-if="isMaskedValue(originalMaskedValues.s3.secret_key)" class="text-muted">
+                                        Leave empty to keep current value, or enter new value to update
+                                    </small>
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Bucket</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Bucket Name
+                                        <i class="ti ti-info-circle text-muted" title="Your S3 bucket name"></i>
+                                    </label>
                                     <input
                                         v-model="settings.s3.bucket"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="my-backup-bucket"
                                         :disabled="saving"
                                         required
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Region</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Region
+                                        <i class="ti ti-info-circle text-muted" title="AWS region where your bucket exists"></i>
+                                    </label>
                                     <input
                                         v-model="settings.s3.region"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
-                                        placeholder="e.g., us-east-1"
+                                        placeholder="us-east-1"
                                         :disabled="saving"
                                         required
                                     />
+                                    <small class="text-muted">Examples: us-east-1, eu-west-1, ap-south-1</small>
                                 </div>
                                 <div class="col-12 mt-3 mt-md-4">
                                     <div class="d-flex flex-column flex-sm-row gap-2">
@@ -242,10 +363,14 @@ const testConnection = async (type) => {
                             <i class="ti ti-info-circle me-2"></i>
                             <strong>Backblaze B2 Configuration:</strong>
                             <ul class="mb-0 mt-2">
-                                <li>Use your <strong>Application Key ID</strong> (not Master Key)</li>
-                                <li>Use your <strong>Application Key</strong> (not Master Key)</li>
-                                <li>Bucket must be the <strong>bucket name</strong> (e.g., "larasafe")</li>
-                                <li>Endpoint format: <code>https://s3.{region}.backblazeb2.com</code></li>
+                                <li>Log into <a href="https://secure.backblaze.com/b2_buckets.htm" target="_blank" class="text-primary">Backblaze Console</a></li>
+                                <li>Create a bucket or select existing one</li>
+                                <li>Go to <strong>App Keys</strong> → Create new Application Key</li>
+                                <li>Use <strong>Application Key ID</strong> (not Master Key ID)</li>
+                                <li>Use <strong>Application Key</strong> (not Master Key)</li>
+                                <li>Bucket name: The bucket name (e.g., "larasafe"), not bucket ID</li>
+                                <li>Endpoint: Found in bucket details → <strong>S3 Endpoint</strong></li>
+                                <li>Format: <code>https://s3.{region}.backblazeb2.com</code></li>
                             </ul>
                         </div>
                         <form @submit.prevent="saveSettings('b2')">
@@ -259,6 +384,7 @@ const testConnection = async (type) => {
                                         v-model="settings.b2.key_id"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="0050123456789abc0000000001"
                                         :disabled="saving"
                                         required
                                     />
@@ -267,14 +393,21 @@ const testConnection = async (type) => {
                                     <label class="form-label text-dark mb-2">
                                         Application Key
                                         <i class="ti ti-info-circle text-muted" title="Your B2 Application Key (not Master Key)"></i>
+                                        <span v-if="isMaskedValue(settings.b2.app_key)" class="text-muted small">
+                                            (currently saved)
+                                        </span>
                                     </label>
                                     <input
                                         v-model="settings.b2.app_key"
                                         type="password"
                                         class="form-control border rounded p-2 p-md-3"
+                                        :placeholder="getPlaceholder('b2', 'app_key')"
                                         :disabled="saving"
-                                        required
+                                        :required="!isMaskedValue(originalMaskedValues.b2.app_key)"
                                     />
+                                    <small v-if="isMaskedValue(originalMaskedValues.b2.app_key)" class="text-muted">
+                                        Leave empty to keep current value, or enter new value to update
+                                    </small>
                                 </div>
                                 <div class="col-12 col-md-6">
                                     <label class="form-label text-dark mb-2">
@@ -285,14 +418,14 @@ const testConnection = async (type) => {
                                         v-model="settings.b2.bucket"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
-                                        placeholder="e.g., larasafe"
+                                        placeholder="larasafe"
                                         :disabled="saving"
                                         required
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
                                     <label class="form-label text-dark mb-2">
-                                        Endpoint
+                                        S3 Endpoint
                                         <i class="ti ti-info-circle text-muted" title="Full S3-compatible endpoint URL"></i>
                                     </label>
                                     <input
@@ -303,7 +436,7 @@ const testConnection = async (type) => {
                                         :disabled="saving"
                                         required
                                     />
-                                    <small class="text-muted">Found in your B2 bucket details</small>
+                                    <small class="text-muted">Found in your B2 bucket details under "Endpoint"</small>
                                 </div>
                                 <div class="col-12 mt-3 mt-md-4">
                                     <div class="d-flex flex-column flex-sm-row gap-2">
@@ -340,47 +473,83 @@ const testConnection = async (type) => {
 
                     <!-- Wasabi Configuration -->
                     <div v-if="activeTab === 'Wasabi'" class="config-section">
+                        <div class="alert alert-info mb-4">
+                            <i class="ti ti-info-circle me-2"></i>
+                            <strong>Wasabi Configuration:</strong>
+                            <ul class="mb-0 mt-2">
+                                <li>Log into <a href="https://console.wasabisys.com/" target="_blank" class="text-primary">Wasabi Console</a></li>
+                                <li>Go to <strong>Access Keys</strong> → Create new Access Key</li>
+                                <li>Copy the <strong>Access Key</strong> and <strong>Secret Key</strong></li>
+                                <li>Create or select a bucket in your desired region</li>
+                                <li>Region examples: <code>us-east-1</code>, <code>eu-central-1</code></li>
+                                <li>Endpoint format: <code>https://s3.{region}.wasabisys.com</code></li>
+                                <li>Note: Wasabi uses S3-compatible API</li>
+                            </ul>
+                        </div>
                         <form @submit.prevent="saveSettings('wasabi')">
                             <div class="row g-3 g-md-4">
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Access Key</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Access Key
+                                        <i class="ti ti-info-circle text-muted" title="Your Wasabi Access Key"></i>
+                                    </label>
                                     <input
                                         v-model="settings.wasabi.access_key"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="ABCDEFGHIJKLMNOPQRST"
                                         :disabled="saving"
                                         required
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Secret Key</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Secret Key
+                                        <i class="ti ti-info-circle text-muted" title="Your Wasabi Secret Key"></i>
+                                        <span v-if="isMaskedValue(settings.wasabi.secret_key)" class="text-muted small">
+                                            (currently saved)
+                                        </span>
+                                    </label>
                                     <input
                                         v-model="settings.wasabi.secret_key"
                                         type="password"
                                         class="form-control border rounded p-2 p-md-3"
+                                        :placeholder="getPlaceholder('wasabi', 'secret_key')"
                                         :disabled="saving"
-                                        required
+                                        :required="!isMaskedValue(originalMaskedValues.wasabi.secret_key)"
                                     />
+                                    <small v-if="isMaskedValue(originalMaskedValues.wasabi.secret_key)" class="text-muted">
+                                        Leave empty to keep current value, or enter new value to update
+                                    </small>
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Bucket</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Bucket Name
+                                        <i class="ti ti-info-circle text-muted" title="Your Wasabi bucket name"></i>
+                                    </label>
                                     <input
                                         v-model="settings.wasabi.bucket"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
+                                        placeholder="my-backups"
                                         :disabled="saving"
                                         required
                                     />
                                 </div>
                                 <div class="col-12 col-md-6">
-                                    <label class="form-label text-dark mb-2">Region</label>
+                                    <label class="form-label text-dark mb-2">
+                                        Region
+                                        <i class="ti ti-info-circle text-muted" title="Wasabi region where your bucket exists"></i>
+                                    </label>
                                     <input
                                         v-model="settings.wasabi.region"
                                         type="text"
                                         class="form-control border rounded p-2 p-md-3"
-                                        placeholder="e.g., us-east-1"
+                                        placeholder="us-east-1"
                                         :disabled="saving"
+                                        required
                                     />
+                                    <small class="text-muted">Examples: us-east-1, eu-central-1, ap-northeast-1</small>
                                 </div>
                                 <div class="col-12 mt-3 mt-md-4">
                                     <div class="d-flex flex-column flex-sm-row gap-2">
@@ -421,7 +590,6 @@ const testConnection = async (type) => {
 </template>
 
 <style scoped>
-/* Existing styles... */
 .tabs-container {
     display: flex;
     gap: 0.5rem;
@@ -547,5 +715,24 @@ const testConnection = async (type) => {
     background-color: #bbdefb;
     padding: 2px 6px;
     border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+}
+
+.alert-info a {
+    font-weight: 600;
+    text-decoration: underline;
+}
+
+.alert-info a:hover {
+    text-decoration: none;
+}
+
+.alert-info ul {
+    padding-left: 1.5rem;
+}
+
+.alert-info ul li {
+    margin-bottom: 0.5rem;
 }
 </style>

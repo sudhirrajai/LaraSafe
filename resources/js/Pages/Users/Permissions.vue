@@ -171,7 +171,7 @@ const isEditingRestrictedUser = computed(() => {
                     <!-- User Info -->
                     <div class="alert alert-light-info d-flex align-items-center mb-4">
                         <div v-if="user.avatar" class="me-3">
-                            <img :src="user.avatar" alt="avatar" class="rounded-circle" width="50" height="50">
+                            <img :src="`/storage/${user.avatar}`" alt="avatar" class="rounded-circle" width="50" height="50">
                         </div>
                         <div v-else class="me-3">
                             <div class="rounded-circle bg-primary text-white d-flex align-items-center justify-content-center" style="width: 50px; height: 50px; font-size: 20px;">

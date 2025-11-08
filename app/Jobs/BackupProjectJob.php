@@ -106,7 +106,7 @@ class BackupProjectJob implements ShouldQueue
 
                 // Save in created_backups table
                 $createdBackup = $this->backup->createdBackups()->create([
-                    'file_name' => pathinfo($fileName, PATHINFO_FILENAME),
+                    'file_name' => $fileName,
                     'file_path' => $finalPath,
                     'size' => $fileSize,
                     'storage_disk' => $disk,
