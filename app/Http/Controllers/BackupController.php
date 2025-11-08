@@ -50,6 +50,7 @@ class BackupController extends Controller
             'project_id'       => 'required|exists:projects,id',
             'file_name'        => 'required|string|max:255',
             'storage_disk' => 'required|in:local,s3,b2,wasabi,other',
+            'frequency' => 'nullable|in:daily,weekly,monthly',
             'include_database' => 'boolean',
         ];
 
@@ -486,35 +487,44 @@ class BackupController extends Controller
         $backup = Backup::with('project')->findOrFail($id);
         $projects = Project::all();
 
-        // Decrypt credentials if they exist in JSON
+        // Decrypt credentials if they exist
         if (!empty($backup->database_config)) {
             $dbConfig = $backup->database_config;
 
-            if (!empty($dbConfig['credentials']) && is_string($dbConfig['credentials'])) {
+            if (!empty($dbConfig['credentials'])) {
                 try {
-                    // Attempt to decrypt
-                    $decrypted = decrypt($dbConfig['credentials']);
-
-                    // Validate JSON structure after decrypting
-                    $decoded = json_decode($decrypted, true);
-
-                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                        $dbConfig['credentials'] = $decoded;
+                    // Check if credentials is a string (encrypted) or already an array
+                    if (is_string($dbConfig['credentials'])) {
+                        // It's encrypted, decrypt it
+                        $decrypted = decrypt($dbConfig['credentials']);
+                        
+                        // The decrypted value should be JSON, decode it
+                        $decoded = json_decode($decrypted, true);
+                        
+                        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                            $dbConfig['credentials'] = $decoded;
+                        } else {
+                            \Log::warning("Invalid JSON format in decrypted credentials for backup ID {$id}");
+                            $dbConfig['credentials'] = null;
+                        }
+                    } elseif (is_array($dbConfig['credentials'])) {
+                        // Already decrypted/decoded (possibly from model casting)
+                        // No action needed, it's ready to use
+                        \Log::info("Credentials already in array format for backup ID {$id}");
                     } else {
-                        \Log::warning("Invalid JSON format in decrypted credentials for backup ID {$id}");
+                        \Log::warning("Unexpected credentials format for backup ID {$id}");
                         $dbConfig['credentials'] = null;
                     }
                 } catch (\Illuminate\Contracts\Encryption\DecryptException $e) {
                     \Log::warning("Decryption failed for backup ID {$id}: " . $e->getMessage());
                     $dbConfig['credentials'] = null;
                 } catch (\Throwable $e) {
-                    \Log::error("Unexpected error while decrypting credentials for backup ID {$id}: " . $e->getMessage());
+                    \Log::error("Unexpected error processing credentials for backup ID {$id}: " . $e->getMessage());
                     $dbConfig['credentials'] = null;
                 }
             } else {
                 $dbConfig['credentials'] = null;
             }
-
 
             // Reassign the modified config back to the model
             $backup->database_config = $dbConfig;

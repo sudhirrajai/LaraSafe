@@ -42,10 +42,11 @@ class Backup extends Model
     protected static function boot()
     {
         parent::boot();
-
-        static::creating(function ($model) {
-            if (empty($model->id)) {
-                $model->id = (string) Str::uuid();
+        
+        static::creating(function ($backup) {
+            $validDisks = ['local', 's3', 'b2', 'wasabi'];
+            if (!in_array($backup->storage_disk, $validDisks)) {
+                throw new \Exception("Invalid storage disk: {$backup->storage_disk}");
             }
         });
     }
