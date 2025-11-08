@@ -3,9 +3,8 @@ import MainLayout from '@/Layouts/MainLayout.vue'
 import { useForm } from '@inertiajs/vue3'
 import { ref, computed } from 'vue'
 import { router } from '@inertiajs/vue3'
-import axios from 'axios'  // Import axios for API requests
+import axios from 'axios'
 
-// Load SweetAlert2 from CDN
 const Swal = window.Swal
 
 defineOptions({
@@ -26,16 +25,16 @@ const form = useForm({
     frequency: null,
     time: null,
     include_database: false,
-    db_source: 'env', // 'env', 'custom', 'project_config'
-    // Custom DB credentials (only used if db_source is 'custom')
+    db_source: 'env',
     db_host: '',
     db_port: '3306',
     db_name: '',
     db_username: '',
     db_password: '',
-    // Additional options
-    db_tables: 'all', // 'all', 'selected'
+    db_tables: 'all',
     selected_tables: [],
+    auto_delete_enabled: false,
+    auto_delete_after_days: 7,
 })
 
 const touched = ref({
@@ -62,7 +61,6 @@ const errors = computed(() => {
         time: touched.value.time && autoBackupEnabled.value && !form.time ? 'Backup time is required' : '',
     }
 
-    // Add database validation only if custom DB is selected
     if (form.include_database && form.db_source === 'custom') {
         return {
             ...baseErrors,
@@ -79,7 +77,6 @@ const isValid = computed(() => {
     return !Object.values(errors.value).some(error => error !== '')
 })
 
-// Computed property to show database source info
 const dbSourceInfo = computed(() => {
     switch (form.db_source) {
         case 'env':
@@ -94,7 +91,6 @@ const dbSourceInfo = computed(() => {
 })
 
 const handleSubmit = () => {
-    // Mark all fields as touched
     Object.keys(touched.value).forEach(key => touched.value[key] = true)
 
     if (!isValid.value) {
@@ -111,7 +107,6 @@ const handleSubmit = () => {
         return
     }
 
-    // Prepare data based on selections
     const data = {
         project_id: form.project_id,
         file_name: form.file_name,
@@ -120,7 +115,6 @@ const handleSubmit = () => {
         ...(autoBackupEnabled.value && { frequency: form.frequency, time: form.time }),
     }
 
-    // Add database-related fields if database backup is enabled
     if (form.include_database) {
         data.db_source = form.db_source
         data.db_tables = form.db_tables
@@ -136,6 +130,11 @@ const handleSubmit = () => {
         if (form.db_tables === 'selected' && form.selected_tables.length > 0) {
             data.selected_tables = form.selected_tables
         }
+    }
+
+    if (form.auto_delete_enabled) {
+        data.auto_delete_enabled = true
+        data.auto_delete_after_days = form.auto_delete_after_days
     }
 
     form.post('/backups/store-backup', {
@@ -210,7 +209,7 @@ const testDatabaseConnection = () => {
             <div class="card">
                 <div class="card-body">
                     <form @submit.prevent="handleSubmit">
-                        <!-- Existing fields -->
+                        <!-- Project Selection -->
                         <div class="mb-3">
                             <label for="projectSelect" class="form-label">Select Project</label>
                             <select class="form-select" id="projectSelect" v-model="form.project_id"
@@ -226,6 +225,7 @@ const testDatabaseConnection = () => {
                             </div>
                         </div>
 
+                        <!-- File Name -->
                         <div class="mb-3">
                             <label for="backupFileName" class="form-label">File Name</label>
                             <input type="text" class="form-control" id="backupFileName" v-model="form.file_name"
@@ -280,17 +280,12 @@ const testDatabaseConnection = () => {
                                 {{ errors.storage_disk }}
                             </div>
 
-                            <!-- Optional Info Box -->
                             <div v-if="form.storage_disk" class="alert alert-info mt-2">
                                 <i class="ti ti-info-circle me-2"></i>
-                                <span v-if="form.storage_disk === 'local'">Backups will be stored locally on the same
-                                    server.</span>
-                                <span v-else-if="form.storage_disk === 's3'">Backups will be uploaded to Amazon S3.
-                                    Ensure your keys are configured in Cloud Settings.</span>
-                                <span v-else-if="form.storage_disk === 'b2'">Backups will be uploaded to Backblaze B2
-                                    cloud storage.</span>
-                                <span v-else-if="form.storage_disk === 'wasabi'">Backups will be uploaded to Wasabi
-                                    cloud storage.</span>
+                                <span v-if="form.storage_disk === 'local'">Backups will be stored locally on the same server.</span>
+                                <span v-else-if="form.storage_disk === 's3'">Backups will be uploaded to Amazon S3. Ensure your keys are configured in Cloud Settings.</span>
+                                <span v-else-if="form.storage_disk === 'b2'">Backups will be uploaded to Backblaze B2 cloud storage.</span>
+                                <span v-else-if="form.storage_disk === 'wasabi'">Backups will be uploaded to Wasabi cloud storage.</span>
                             </div>
                         </div>
 
@@ -300,7 +295,6 @@ const testDatabaseConnection = () => {
                                 <div class="card-header bg-light">
                                     <div class="form-check form-switch">
                                         <input type="hidden" name="include_database" :value="0" />
-
                                         <input type="checkbox" class="form-check-input" id="includeDatabaseToggle"
                                             v-model="form.include_database">
                                         <label class="form-check-label fw-bold" for="includeDatabaseToggle">
@@ -311,7 +305,6 @@ const testDatabaseConnection = () => {
                                 </div>
 
                                 <div v-if="form.include_database" class="card-body">
-                                    <!-- Database Source Selection -->
                                     <div class="mb-3">
                                         <label class="form-label">Database Credentials Source</label>
                                         <div class="form-check">
@@ -319,8 +312,7 @@ const testDatabaseConnection = () => {
                                                 id="dbSourceEnv" value="env" v-model="form.db_source">
                                             <label class="form-check-label" for="dbSourceEnv">
                                                 <strong>Use Project's .env File</strong>
-                                                <small class="d-block text-muted">Automatically read from project's
-                                                    environment file</small>
+                                                <small class="d-block text-muted">Automatically read from project's environment file</small>
                                             </label>
                                         </div>
                                         <div class="form-check">
@@ -328,8 +320,7 @@ const testDatabaseConnection = () => {
                                                 id="dbSourceCustom" value="custom" v-model="form.db_source">
                                             <label class="form-check-label" for="dbSourceCustom">
                                                 <strong>Custom Database Credentials</strong>
-                                                <small class="d-block text-muted">Specify different database
-                                                    credentials</small>
+                                                <small class="d-block text-muted">Specify different database credentials</small>
                                             </label>
                                         </div>
                                         <div class="alert alert-info mt-2">
@@ -338,7 +329,6 @@ const testDatabaseConnection = () => {
                                         </div>
                                     </div>
 
-                                    <!-- Custom Database Credentials -->
                                     <div v-if="form.db_source === 'custom'" class="border rounded p-3 bg-light mb-3">
                                         <h6 class="mb-3">Database Connection Details</h6>
                                         <div class="row">
@@ -373,8 +363,7 @@ const testDatabaseConnection = () => {
                                                 <input type="text" class="form-control" id="dbUsername"
                                                     v-model="form.db_username" @blur="touched.db_username = true"
                                                     :class="{ 'is-invalid': errors.db_username && touched.db_username }">
-                                                <div v-if="errors.db_username && touched.db_username"
-                                                    class="invalid-feedback">
+                                                <div v-if="errors.db_username && touched.db_username" class="invalid-feedback">
                                                     {{ errors.db_username }}
                                                 </div>
                                             </div>
@@ -384,8 +373,7 @@ const testDatabaseConnection = () => {
                                             <input type="password" class="form-control" id="dbPassword"
                                                 v-model="form.db_password" @blur="touched.db_password = true"
                                                 :class="{ 'is-invalid': errors.db_password && touched.db_password }">
-                                            <div v-if="errors.db_password && touched.db_password"
-                                                class="invalid-feedback">
+                                            <div v-if="errors.db_password && touched.db_password" class="invalid-feedback">
                                                 {{ errors.db_password }}
                                             </div>
                                         </div>
@@ -396,12 +384,10 @@ const testDatabaseConnection = () => {
                                         </button>
                                     </div>
 
-                                    <!-- Advanced Database Options -->
                                     <div class="mb-3">
                                         <button type="button" class="btn btn-link p-0 text-decoration-none"
                                             @click="showAdvancedDb = !showAdvancedDb">
-                                            <i
-                                                :class="showAdvancedDb ? 'ti ti-chevron-down' : 'ti ti-chevron-right'"></i>
+                                            <i :class="showAdvancedDb ? 'ti ti-chevron-down' : 'ti ti-chevron-right'"></i>
                                             Advanced Database Options
                                         </button>
 
@@ -433,6 +419,56 @@ const testDatabaseConnection = () => {
                                                 </div>
                                             </div>
                                         </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Auto Delete Section -->
+                        <div class="mb-4">
+                            <div class="card border-warning">
+                                <div class="card-header bg-light">
+                                    <div class="form-check form-switch">
+                                        <input type="checkbox" class="form-check-input" id="autoDeleteToggle"
+                                            v-model="form.auto_delete_enabled">
+                                        <label class="form-check-label fw-bold" for="autoDeleteToggle">
+                                            <i class="ti ti-trash-x me-2"></i>
+                                            Auto-Delete Old Backups
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div v-if="form.auto_delete_enabled" class="card-body">
+                                    <div class="alert alert-warning">
+                                        <i class="ti ti-alert-triangle me-2"></i>
+                                        <strong>Warning:</strong> Backups older than the specified period will be automatically deleted to save storage space.
+                                    </div>
+
+                                    <div class="mb-3">
+                                        <label for="autoDeleteDays" class="form-label">Delete Backups Older Than</label>
+                                        <select class="form-select" id="autoDeleteDays" v-model.number="form.auto_delete_after_days">
+                                            <option :value="7">7 days (1 week)</option>
+                                            <option :value="14">14 days (2 weeks)</option>
+                                            <option :value="30">30 days (1 month)</option>
+                                            <option :value="60">60 days (2 months)</option>
+                                            <option :value="90">90 days (3 months)</option>
+                                            <option :value="180">180 days (6 months)</option>
+                                            <option :value="365">365 days (1 year)</option>
+                                        </select>
+                                        <small class="form-text text-muted">
+                                            Backups created more than {{ form.auto_delete_after_days }} days ago will be automatically removed
+                                        </small>
+                                    </div>
+
+                                    <div class="alert alert-info">
+                                        <i class="ti ti-info-circle me-2"></i>
+                                        <strong>How it works:</strong>
+                                        <ul class="mb-0 mt-2">
+                                            <li>The system checks for old backups daily at 2 AM</li>
+                                            <li>Only backups older than your specified period are deleted</li>
+                                            <li>Both the backup files and database records are removed</li>
+                                            <li>You can change this setting anytime</li>
+                                        </ul>
                                     </div>
                                 </div>
                             </div>

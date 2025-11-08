@@ -10,3 +10,4 @@ Artisan::command('inspire', function () {
 
 Schedule::command('backups:dispatch-due')->everyMinute();
 Schedule::command('app:cleanup-expired-backups')->everyMinute();
+Schedule::command('backups:cleanup')->dailyAt('02:00');

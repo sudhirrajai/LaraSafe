@@ -27,6 +27,8 @@ class Backup extends Model
         'next_backup_at',
         'include_database',
         'database_config',
+        'auto_delete_enabled',
+        'auto_delete_after_days',
     ];
 
     protected $casts = [
@@ -36,6 +38,7 @@ class Backup extends Model
         'next_backup_at' => 'datetime',
         'include_database' => 'boolean',
         'database_config'  => 'array',
+        'auto_delete_enabled' => 'boolean',
     ];
 
     protected static function boot()
