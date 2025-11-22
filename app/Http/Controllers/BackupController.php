@@ -49,9 +49,12 @@ class BackupController extends Controller
         $rules = [
             'project_id'       => 'required|exists:projects,id',
             'file_name'        => 'required|string|max:255',
-            'storage_disk' => 'required|in:local,s3,b2,wasabi,other',
-            'frequency' => 'nullable|in:daily,weekly,monthly',
+            'storage_disk'     => 'required|in:local,s3,b2,wasabi,other', // Fixed to include b2,wasabi
             'include_database' => 'boolean',
+            'frequency'        => 'nullable|in:daily,weekly,monthly',
+            'time'             => 'nullable|date_format:H:i',
+            'auto_delete_enabled' => 'boolean', // ADD THIS
+            'auto_delete_after_days' => 'nullable|integer|min:1', // ADD THIS
         ];
 
         $includeDatabase = (bool) $request->input('include_database');
@@ -128,6 +131,8 @@ class BackupController extends Controller
             'next_backup_at'   => $nextBackup,
             'include_database' => $includeDatabase,
             'database_config'  => $dbConfig,
+            'auto_delete_enabled' => $request->boolean('auto_delete_enabled'),
+            'auto_delete_after_days' => $request->input('auto_delete_after_days', 7),
         ]);
 
         // Dispatch job and notify user
@@ -228,7 +233,7 @@ class BackupController extends Controller
                 // Cloud storage download - download to temp first
                 $tempPath = storage_path("app/temp/download_{$id}_{$createdBackup->file_name}.zip");
                 $tempDir = dirname($tempPath);
-                
+
                 if (!is_dir($tempDir)) {
                     mkdir($tempDir, 0755, true);
                 }
@@ -274,7 +279,6 @@ class BackupController extends Controller
                 // Delete temp file after download
                 return response()->download($tempPath, $downloadName)->deleteFileAfterSend(true);
             }
-
         } catch (\Exception $e) {
             \Log::error("Download failed", [
                 'backup_id' => $id,
@@ -317,7 +321,7 @@ class BackupController extends Controller
                         } else {
                             // Handle cloud storage deletion (S3, B2, Wasabi, etc.)
                             $deleted = $this->storageService->deleteFile($disk, $filePath);
-                            
+
                             \Log::info("Cloud storage deletion attempt", [
                                 'disk' => $disk,
                                 'path' => $filePath,
@@ -402,7 +406,7 @@ class BackupController extends Controller
                 } else {
                     // Cloud storage deletion
                     $fileDeleted = $this->storageService->deleteFile($storageDisk, $filePath);
-                    
+
                     \Log::info("Cloud backup file deletion", [
                         'id' => $id,
                         'disk' => $storageDisk,
@@ -441,7 +445,6 @@ class BackupController extends Controller
             }
 
             return redirect()->back()->with('success', $message);
-
         } catch (\Exception $e) {
             \Log::error("Failed to delete backup file", [
                 'id' => $id,
@@ -488,10 +491,10 @@ class BackupController extends Controller
                     if (is_string($dbConfig['credentials'])) {
                         // It's encrypted, decrypt it
                         $decrypted = decrypt($dbConfig['credentials']);
-                        
+
                         // The decrypted value should be JSON, decode it
                         $decoded = json_decode($decrypted, true);
-                        
+
                         if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
                             $dbConfig['credentials'] = $decoded;
                         } else {
@@ -534,10 +537,12 @@ class BackupController extends Controller
         $rules = [
             'project_id'       => 'required|exists:projects,id',
             'file_name'        => 'required|string|max:255',
-            'storage_disk'     => 'required|in:local,s3,other',
+            'storage_disk'     => 'required|in:local,s3,b2,wasabi,other',
             'include_database' => 'boolean',
             'frequency'        => 'nullable|in:daily,weekly,monthly',
             'time'             => 'nullable|date_format:H:i',
+            'auto_delete_enabled' => 'boolean',
+            'auto_delete_after_days' => 'nullable|integer|min:1',
         ];
 
         $includeDatabase = (bool) $request->input('include_database');
@@ -603,7 +608,7 @@ class BackupController extends Controller
             }
         }
 
-        // Update backup record
+        // Update backup record WITH auto-delete fields
         $backup->update([
             'project_id'       => $validated['project_id'],
             'file_name'        => $validated['file_name'],
@@ -613,22 +618,23 @@ class BackupController extends Controller
             'next_backup_at'   => $nextBackup,
             'include_database' => $includeDatabase,
             'database_config'  => $dbConfig,
+            'auto_delete_enabled' => $request->boolean('auto_delete_enabled'),
+            'auto_delete_after_days' => $request->input('auto_delete_after_days', 7),
         ]);
 
-        BackupProjectJob::dispatch($backup);
+        // BackupProjectJob::dispatch($backup);
 
-        try {
-            Mail::to($backup->project->user->email ?? 'sudhirrajai@proton.me')
-                ->send(new \App\Mail\BackupStatusMail($backup));
-        } catch (\Exception $e) {
-            \Log::info("Error sending backup update email: " . $e->getMessage());
-        }
+        // try {
+        //     Mail::to($backup->project->user->email ?? 'sudhirrajai@proton.me')
+        //         ->send(new \App\Mail\BackupStatusMail($backup));
+        // } catch (\Exception $e) {
+        //     \Log::info("Error sending backup update email: " . $e->getMessage());
+        // }
 
         return redirect()
             ->route('manage-backups')
             ->with('status', 'Backup updated successfully!');
     }
-
 
     /**
      * View all backups for a specific backup configuration
@@ -781,19 +787,19 @@ class BackupController extends Controller
 
     /**
      * Helper method to delete local files with multiple fallback attempts
-    */
+     */
     private function deleteLocalFile(string $filePath): bool
     {
         $attempts = [
             // Attempt 1: Laravel Storage facade
-            function($path) {
+            function ($path) {
                 if (Storage::disk('local')->exists($path)) {
                     return Storage::disk('local')->delete($path);
                 }
                 return false;
             },
             // Attempt 2: Direct filesystem with storage_path
-            function($path) {
+            function ($path) {
                 $fullPath = storage_path("app/{$path}");
                 if (file_exists($fullPath)) {
                     return @unlink($fullPath);
@@ -801,7 +807,7 @@ class BackupController extends Controller
                 return false;
             },
             // Attempt 3: Try without 'private/' prefix if it exists
-            function($path) {
+            function ($path) {
                 $altPath = str_replace('private/', '', $path);
                 $fullPath = storage_path("app/{$altPath}");
                 if (file_exists($fullPath)) {
@@ -810,7 +816,7 @@ class BackupController extends Controller
                 return false;
             },
             // Attempt 4: Try with 'private/' prefix if not exists
-            function($path) {
+            function ($path) {
                 if (!str_starts_with($path, 'private/')) {
                     $altPath = "private/{$path}";
                     $fullPath = storage_path("app/{$altPath}");
@@ -821,7 +827,7 @@ class BackupController extends Controller
                 return false;
             },
             // Attempt 5: Public storage
-            function($path) {
+            function ($path) {
                 $publicPath = public_path("storage/{$path}");
                 if (file_exists($publicPath)) {
                     return @unlink($publicPath);
@@ -851,8 +857,7 @@ class BackupController extends Controller
         \Log::warning("All deletion attempts failed for local file", [
             'path' => $filePath
         ]);
-        
+
         return false;
     }
-
 }

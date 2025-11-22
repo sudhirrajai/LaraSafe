@@ -112,6 +112,8 @@ const handleSubmit = () => {
         file_name: form.file_name,
         storage_disk: form.storage_disk,
         include_database: form.include_database,
+        auto_delete_enabled: form.auto_delete_enabled, // Add this
+        auto_delete_after_days: form.auto_delete_after_days, // Add this
         ...(autoBackupEnabled.value && { frequency: form.frequency, time: form.time }),
     }
 
@@ -132,10 +134,11 @@ const handleSubmit = () => {
         }
     }
 
-    if (form.auto_delete_enabled) {
-        data.auto_delete_enabled = true
-        data.auto_delete_after_days = form.auto_delete_after_days
-    }
+    // Remove this duplicate section - it's already added above
+    // if (form.auto_delete_enabled) {
+    //     data.auto_delete_enabled = true
+    //     data.auto_delete_after_days = form.auto_delete_after_days
+    // }
 
     form.post('/backups/store-backup', {
         data: data,
