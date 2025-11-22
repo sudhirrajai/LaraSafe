@@ -622,14 +622,14 @@ class BackupController extends Controller
             'auto_delete_after_days' => $request->input('auto_delete_after_days', 7),
         ]);
 
-        BackupProjectJob::dispatch($backup);
+        // BackupProjectJob::dispatch($backup);
 
-        try {
-            Mail::to($backup->project->user->email ?? 'sudhirrajai@proton.me')
-                ->send(new \App\Mail\BackupStatusMail($backup));
-        } catch (\Exception $e) {
-            \Log::info("Error sending backup update email: " . $e->getMessage());
-        }
+        // try {
+        //     Mail::to($backup->project->user->email ?? 'sudhirrajai@proton.me')
+        //         ->send(new \App\Mail\BackupStatusMail($backup));
+        // } catch (\Exception $e) {
+        //     \Log::info("Error sending backup update email: " . $e->getMessage());
+        // }
 
         return redirect()
             ->route('manage-backups')

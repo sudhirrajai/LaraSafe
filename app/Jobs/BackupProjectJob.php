@@ -35,124 +35,240 @@ class BackupProjectJob implements ShouldQueue
     public function handle(DynamicStorageService $storageService): void
     {
         $this->storageService = $storageService;
+        $zip = null; // Initialize to null
+        $tempPath = null;
         
-        $user = User::first();
-        $project = $this->backup->project;
-        $sourceDir = rtrim($project->path, '/');
-        $baseName = pathinfo($this->backup->file_name, PATHINFO_FILENAME);
-        $disk = $this->backup->storage_disk ?? 'local';
+        try {
+            Log::info('Starting backup job', [
+                'backup_id' => $this->backup->id,
+                'storage_disk' => $this->backup->storage_disk,
+                'project' => $this->backup->project->name
+            ]);
 
-        // Create timestamp for unique filename
-        $timestamp = now()->format('Y_m_d_H_i_s');
-        $fileName = $baseName . '_' . $timestamp . '.zip';
-        
-        // For local storage, use private folder
-        if ($disk === 'local') {
-            $backupFolder = "private/backups/{$project->name}";
-            $relativePath = "{$backupFolder}/{$fileName}";
-            $fullPath = storage_path("app/{$relativePath}");
-            
-            // Ensure directory exists
-            $dirPath = dirname($fullPath);
-            if (!is_dir($dirPath)) {
-                mkdir($dirPath, 0755, true);
+            $user = User::first();
+            $project = $this->backup->project;
+            $sourceDir = rtrim($project->path, '/');
+            $baseName = pathinfo($this->backup->file_name, PATHINFO_FILENAME);
+            $disk = $this->backup->storage_disk ?? 'local';
+
+            // Validate source directory exists
+            if (!is_dir($sourceDir)) {
+                throw new Exception("Project directory not found: {$sourceDir}");
             }
-        } else {
-            // For cloud storage, create in temp directory first
-            $relativePath = "backups/{$project->name}/{$fileName}";
-            $fullPath = storage_path("app/temp/{$fileName}");
+
+            // Create timestamp for unique filename
+            $timestamp = now()->format('Y_m_d_H_i_s');
+            $fileName = $baseName . '_' . $timestamp . '.zip';
+            
+            // Consistent path handling for local vs cloud
+            $tempPath = storage_path("app/temp/{$fileName}");
             
             // Ensure temp directory exists
-            $tempDir = dirname($fullPath);
+            $tempDir = dirname($tempPath);
             if (!is_dir($tempDir)) {
                 mkdir($tempDir, 0755, true);
+                Log::info("Created temp directory: {$tempDir}");
             }
-        }
 
-        // Create the ZIP file
-        $zip = new ZipArchive();
-        $openResult = $zip->open($fullPath, ZipArchive::CREATE);
+            Log::info('Creating ZIP file', [
+                'temp_path' => $tempPath,
+                'source_dir' => $sourceDir
+            ]);
 
-        if ($openResult === true) {
+            // Create the ZIP file in temp first (for both local and cloud)
+            $zip = new ZipArchive();
+            $openResult = $zip->open($tempPath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+
+            if ($openResult !== true) {
+                $this->handleBackupFailure($openResult, $tempPath);
+                return;
+            }
+
+            // Add project files
+            Log::info('Adding project files to ZIP');
+            $this->addProjectFilesToZip($zip, $sourceDir);
+
+            // Add database backup if enabled
+            if ($this->backup->include_database) {
+                Log::info('Adding database backup to ZIP');
+                $this->addDatabaseBackupToZip($zip, $project);
+            }
+
+            // Close the ZIP archive
+            $closeResult = $zip->close();
+            $zip = null; // Set to null after closing
+            
+            if (!$closeResult) {
+                throw new Exception('Failed to close ZIP archive');
+            }
+            
+            Log::info('ZIP file created successfully', ['size' => filesize($tempPath)]);
+
+            // Verify ZIP was created
+            if (!file_exists($tempPath) || filesize($tempPath) === 0) {
+                throw new Exception('ZIP file was not created or is empty');
+            }
+
+            // Generate checksum
+            $checksum = hash_file('sha256', $tempPath);
+            $fileSize = filesize($tempPath);
+
+            Log::info('ZIP file details', [
+                'size' => $fileSize,
+                'checksum' => $checksum
+            ]);
+
+            // Handle storage based on disk type
+            if ($disk === 'local') {
+                // For local storage, move to proper location
+                $backupFolder = "private/backups/{$project->name}";
+                $relativePath = "{$backupFolder}/{$fileName}";
+                $finalPath = storage_path("app/{$relativePath}");
+                
+                // Ensure backup directory exists
+                $backupDir = dirname($finalPath);
+                if (!is_dir($backupDir)) {
+                    mkdir($backupDir, 0755, true);
+                    Log::info("Created backup directory: {$backupDir}");
+                }
+
+                // Move from temp to final location
+                if (!rename($tempPath, $finalPath)) {
+                    throw new Exception("Failed to move backup file to final location: {$finalPath}");
+                }
+
+                Log::info('Backup moved to final location', [
+                    'from' => $tempPath,
+                    'to' => $finalPath
+                ]);
+
+                $finalStoragePath = $relativePath;
+                $tempPath = null; // File has been moved, don't try to delete it later
+            } else {
+                // For cloud storage, upload then delete temp
+                $relativePath = "backups/{$project->name}/{$fileName}";
+                
+                Log::info('Uploading to cloud storage', [
+                    'disk' => $disk,
+                    'remote_path' => $relativePath
+                ]);
+
+                $uploadSuccess = $this->uploadToCloudStorage($disk, $tempPath, $relativePath);
+                
+                if (!$uploadSuccess) {
+                    throw new Exception("Failed to upload backup to {$disk}");
+                }
+                
+                Log::info('Cloud upload successful, deleting temp file');
+                
+                // Delete temp file after successful upload
+                if (file_exists($tempPath)) {
+                    unlink($tempPath);
+                    Log::info('Temp file deleted');
+                    $tempPath = null;
+                }
+
+                $finalStoragePath = $relativePath;
+            }
+
+            // Save in created_backups table
+            $createdBackup = $this->backup->createdBackups()->create([
+                'file_name' => $fileName,
+                'file_path' => $finalStoragePath,
+                'size' => $fileSize,
+                'storage_disk' => $disk,
+                'checksum' => $checksum,
+                'expires_at' => now()->addDays($this->backup->auto_delete_after_days ?? 30),
+            ]);
+
+            Log::info('Created backup record', [
+                'id' => $createdBackup->id,
+                'file_path' => $finalStoragePath
+            ]);
+
+            // Update main backup status
+            $this->backup->update([
+                'status' => 'success',
+                'size' => $fileSize,
+                'last_created_backup_id' => $createdBackup->id,
+                'last_backup_at' => now(),
+                'error_message' => null, // Clear any previous errors
+            ]);
+
+            Log::info('Backup completed successfully', [
+                'backup_id' => $this->backup->id,
+                'file_path' => $finalStoragePath,
+                'size' => $fileSize,
+                'storage' => $disk,
+                'includes_database' => $this->backup->include_database
+            ]);
+
+            // Send email notification
             try {
-                // Add project files
-                $this->addProjectFilesToZip($zip, $sourceDir);
-
-                // Add database backup if enabled
-                if ($this->backup->include_database) {
-                    $this->addDatabaseBackupToZip($zip, $project);
-                }
-
-                $zip->close();
-
-                // Generate checksum
-                $checksum = hash_file('sha256', $fullPath);
-                $fileSize = filesize($fullPath);
-
-                // Upload to cloud storage if not local
-                $finalPath = $relativePath;
-                if ($disk !== 'local') {
-                    $uploadSuccess = $this->uploadToCloudStorage($disk, $fullPath, $relativePath);
-                    
-                    if (!$uploadSuccess) {
-                        throw new Exception("Failed to upload backup to {$disk}");
-                    }
-                    
-                    // Delete local temp file after successful upload
-                    if (file_exists($fullPath)) {
-                        unlink($fullPath);
-                    }
-                }
-
-                // Save in created_backups table
-                $createdBackup = $this->backup->createdBackups()->create([
-                    'file_name' => $fileName,
-                    'file_path' => $finalPath,
-                    'size' => $fileSize,
-                    'storage_disk' => $disk,
-                    'checksum' => $checksum,
-                    'expires_at' => now()->addDays($this->backup->retention_days ?? 30),
-                ]);
-
-                // Update main backup status
-                $this->backup->update([
-                    'status' => 'success',
-                    'size' => $fileSize,
-                    'last_created_backup_id' => $createdBackup->id,
-                    'last_backup_at' => now(),
-                ]);
-
-                Log::info('Backup created successfully', [
-                    'backup_id' => $this->backup->id,
-                    'file_path' => $finalPath,
-                    'size' => $fileSize,
-                    'storage' => $disk,
-                    'includes_database' => $this->backup->include_database
-                ]);
-
-                // Send email notification
-                try {
+                if ($user && $user->email) {
                     Mail::to($user->email)->send(new BackupStatusMail($this->backup, $createdBackup));
-                } catch (Exception $e) {
-                    Log::error('Failed to send backup status email', [
-                        'backup_id' => $this->backup->id,
-                        'error' => $e->getMessage(),
+                    Log::info('Backup notification email sent');
+                }
+            } catch (Exception $e) {
+                Log::error('Failed to send backup status email', [
+                    'backup_id' => $this->backup->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+        } catch (Exception $e) {
+            Log::error('Backup job failed', [
+                'backup_id' => $this->backup->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            // Close ZIP if still open and valid
+            if ($zip instanceof ZipArchive) {
+                try {
+                    @$zip->close();
+                    Log::info('Closed ZIP archive after error');
+                } catch (Exception $zipError) {
+                    Log::warning('Could not close ZIP after error', [
+                        'error' => $zipError->getMessage()
                     ]);
                 }
-
-            } catch (Exception $e) {
-                $zip->close();
-                
-                // Clean up files
-                if (file_exists($fullPath)) {
-                    unlink($fullPath);
+            }
+            
+            // Clean up temp file if it still exists
+            if ($tempPath && file_exists($tempPath)) {
+                try {
+                    @unlink($tempPath);
+                    Log::info('Cleaned up temp file after error', ['path' => $tempPath]);
+                } catch (Exception $cleanupError) {
+                    Log::warning('Could not delete temp file', [
+                        'path' => $tempPath,
+                        'error' => $cleanupError->getMessage()
+                    ]);
                 }
-                
-                throw $e;
             }
 
-        } else {
-            $this->handleBackupFailure($openResult, $fullPath);
+            // Update backup status to failed
+            $this->backup->update([
+                'status' => 'failed',
+                'error_message' => $e->getMessage(),
+                'last_backup_at' => now(),
+            ]);
+
+            // Send failure email
+            try {
+                $user = User::first();
+                if ($user && $user->email) {
+                    Mail::to($user->email)->send(new BackupStatusMail($this->backup));
+                }
+            } catch (Exception $mailError) {
+                Log::error('Failed to send failure email', [
+                    'error' => $mailError->getMessage()
+                ]);
+            }
+
+            // Re-throw to mark job as failed
+            throw $e;
         }
     }
 
@@ -161,7 +277,9 @@ class BackupProjectJob implements ShouldQueue
         try {
             Log::info("Uploading backup to {$disk}", [
                 'local_path' => $localPath,
-                'remote_path' => $remotePath
+                'remote_path' => $remotePath,
+                'file_exists' => file_exists($localPath),
+                'file_size' => file_exists($localPath) ? filesize($localPath) : 0
             ]);
 
             $result = $this->storageService->uploadFile($disk, $localPath, $remotePath);
@@ -185,22 +303,58 @@ class BackupProjectJob implements ShouldQueue
 
     private function addProjectFilesToZip(ZipArchive $zip, string $sourceDir): void
     {
-        $files = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($sourceDir, \FilesystemIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::LEAVES_ONLY
-        );
+        $fileCount = 0;
+        $skippedCount = 0;
+        
+        try {
+            $files = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($sourceDir, \FilesystemIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::LEAVES_ONLY
+            );
 
-        foreach ($files as $file) {
-            if ($file->isFile()) {
+            foreach ($files as $file) {
+                if (!$file->isFile()) {
+                    continue;
+                }
+                
                 $filePath = $file->getRealPath();
                 $relativePath = substr($filePath, strlen($sourceDir) + 1);
+                
+                // Skip certain directories/files
+                if (strpos($relativePath, 'node_modules') !== false ||
+                    strpos($relativePath, '.git') !== false ||
+                    strpos($relativePath, 'vendor') !== false) {
+                    $skippedCount++;
+                    continue;
+                }
+                
+                // Skip files that can't be read
+                if (!is_readable($filePath)) {
+                    Log::warning("Skipping unreadable file: {$relativePath}");
+                    $skippedCount++;
+                    continue;
+                }
+                
                 $zip->addFile($filePath, $relativePath);
+                $fileCount++;
             }
+
+            Log::info("Added {$fileCount} files to ZIP", [
+                'skipped' => $skippedCount
+            ]);
+        } catch (Exception $e) {
+            Log::error('Error adding files to ZIP', [
+                'error' => $e->getMessage(),
+                'files_added' => $fileCount
+            ]);
+            throw $e;
         }
     }
 
     private function addDatabaseBackupToZip(ZipArchive $zip, $project): void
     {
+        $tempDumpPath = null;
+        
         try {
             $dbConfig = $this->backup->database_config;
             $dbCredentials = $this->getDatabaseCredentials($dbConfig, $project);
@@ -228,21 +382,29 @@ class BackupProjectJob implements ShouldQueue
                 
                 Log::info('Database backup added to zip', [
                     'backup_id' => $this->backup->id,
-                    'dump_file' => $dumpFileName
+                    'dump_file' => $dumpFileName,
+                    'size' => filesize($tempDumpPath)
                 ]);
-    
-                register_shutdown_function(function() use ($tempDumpPath) {
-                    if (file_exists($tempDumpPath)) {
-                        unlink($tempDumpPath);
-                    }
-                });
             }
     
         } catch (Exception $e) {
             Log::error('Error creating database backup', [
                 'backup_id' => $this->backup->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
+        } finally {
+            // Clean up database dump file
+            if ($tempDumpPath && file_exists($tempDumpPath)) {
+                try {
+                    @unlink($tempDumpPath);
+                    Log::info('Cleaned up database dump file');
+                } catch (Exception $e) {
+                    Log::warning('Failed to clean up database dump', [
+                        'path' => $tempDumpPath
+                    ]);
+                }
+            }
         }
     }
 
@@ -258,7 +420,14 @@ class BackupProjectJob implements ShouldQueue
             
             case 'custom':
                 if (isset($dbConfig['credentials'])) {
-                    return json_decode(decrypt($dbConfig['credentials']), true);
+                    try {
+                        return json_decode(decrypt($dbConfig['credentials']), true);
+                    } catch (Exception $e) {
+                        Log::error('Failed to decrypt DB credentials', [
+                            'error' => $e->getMessage()
+                        ]);
+                        return null;
+                    }
                 }
                 break;
             
@@ -347,6 +516,7 @@ class BackupProjectJob implements ShouldQueue
             $username = $credentials['username'];
             $password = $credentials['password'];
     
+            // Test connection first
             $mysqli = new \mysqli($host, $username, $password, $database, $port);
             if ($mysqli->connect_error) {
                 Log::error('Database connection failed', [
@@ -358,12 +528,14 @@ class BackupProjectJob implements ShouldQueue
             }
             $mysqli->close();
     
+            // Verify output directory is writable
             $outputDir = dirname($outputPath);
             if (!is_writable($outputDir)) {
                 Log::error('Output directory not writable', ['path' => $outputDir]);
                 return false;
             }
     
+            // Build mysqldump command
             $command = sprintf(
                 'mysqldump -h%s -P%d -u%s %s %s > %s 2>&1',
                 escapeshellarg($host),
@@ -374,6 +546,7 @@ class BackupProjectJob implements ShouldQueue
                 escapeshellarg($outputPath)
             );
     
+            // Add specific tables if selected
             if (isset($dbConfig['tables']) && $dbConfig['tables'] === 'selected' && isset($dbConfig['selected_tables'])) {
                 $tables = implode(' ', array_map('escapeshellarg', $dbConfig['selected_tables']));
                 $command = str_replace(
@@ -408,7 +581,8 @@ class BackupProjectJob implements ShouldQueue
     
         } catch (Exception $e) {
             Log::error('Error creating database dump', [
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
             return false;
         }
@@ -416,25 +590,59 @@ class BackupProjectJob implements ShouldQueue
 
     private function handleBackupFailure($openResult, $fullPath): void
     {
-        $user = User::first();
+        $errorMessages = [
+            ZipArchive::ER_EXISTS => 'File already exists',
+            ZipArchive::ER_INCONS => 'Zip archive inconsistent',
+            ZipArchive::ER_INVAL => 'Invalid argument',
+            ZipArchive::ER_MEMORY => 'Malloc failure',
+            ZipArchive::ER_NOENT => 'No such file',
+            ZipArchive::ER_NOZIP => 'Not a zip archive',
+            ZipArchive::ER_OPEN => 'Can\'t open file',
+            ZipArchive::ER_READ => 'Read error',
+            ZipArchive::ER_SEEK => 'Seek error',
+        ];
+
+        $errorMessage = $errorMessages[$openResult] ?? "Unknown error code: {$openResult}";
+
         Log::error('ZipArchive failed to open', [
             'fullPath' => $fullPath,
             'code' => $openResult,
+            'error' => $errorMessage,
+            'directory_exists' => is_dir(dirname($fullPath)),
+            'directory_writable' => is_writable(dirname($fullPath))
         ]);
 
         $this->backup->update([
             'status' => 'failed',
-            'error_message' => 'Unable to create zip file',
+            'error_message' => "Unable to create zip file: {$errorMessage}",
             'last_backup_at' => now(),
         ]);
 
         try {
-            Mail::to($user->email)->send(new BackupStatusMail($this->backup));
+            $user = User::first();
+            if ($user && $user->email) {
+                Mail::to($user->email)->send(new BackupStatusMail($this->backup));
+            }
         } catch (Exception $e) {
-            Log::error('Failed to send backup status email', [
+            Log::error('Failed to send backup failure email', [
                 'backup_id' => $this->backup->id,
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    public function failed(Exception $exception)
+    {
+        Log::error('Backup job permanently failed', [
+            'backup_id' => $this->backup->id,
+            'error' => $exception->getMessage(),
+            'trace' => $exception->getTraceAsString()
+        ]);
+
+        $this->backup->update([
+            'status' => 'failed',
+            'error_message' => $exception->getMessage(),
+            'last_backup_at' => now(),
+        ]);
     }
 }
