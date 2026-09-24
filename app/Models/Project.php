@@ -11,7 +11,7 @@ class Project extends Model
     public $incrementing = false;
 
     protected $fillable = [
-        'id', 'name', 'description', 'path'
+        'id', 'user_id', 'name', 'description', 'path'
     ];
 
     protected static function boot()

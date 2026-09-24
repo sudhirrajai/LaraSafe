@@ -56,64 +56,56 @@ class BackupProjectJob implements ShouldQueue
                 throw new Exception("Project directory not found: {$sourceDir}");
             }
 
-            // Create timestamp for unique filename
+            // Create timestamp for unique filename with .tar.gz (high compression ratio)
             $timestamp = now()->format('Y_m_d_H_i_s');
-            $fileName = $baseName . '_' . $timestamp . '.zip';
+            $fileName = $baseName . '_' . $timestamp . '.tar.gz';
             
             // Consistent path handling for local vs cloud
             $tempPath = storage_path("app/temp/{$fileName}");
-            
-            // Ensure temp directory exists
             $tempDir = dirname($tempPath);
             if (!is_dir($tempDir)) {
                 mkdir($tempDir, 0755, true);
                 Log::info("Created temp directory: {$tempDir}");
             }
 
-            Log::info('Creating ZIP file', [
-                'temp_path' => $tempPath,
-                'source_dir' => $sourceDir
-            ]);
-
-            // Create the ZIP file in temp first (for both local and cloud)
-            $zip = new ZipArchive();
-            $openResult = $zip->open($tempPath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
-
-            if ($openResult !== true) {
-                $this->handleBackupFailure($openResult, $tempPath);
-                return;
+            // Prepare staging directory for standalone disaster recovery assets
+            $stagingDir = storage_path("app/temp/dr_staging_{$this->backup->id}_{$timestamp}");
+            if (!is_dir($stagingDir)) {
+                mkdir($stagingDir, 0755, true);
             }
 
-            // Add project files
-            Log::info('Adding project files to ZIP');
-            $this->addProjectFilesToZip($zip, $sourceDir);
-
-            // Add database backup if enabled
+            // Dump database into staging if enabled
+            $dbName = null;
             if ($this->backup->include_database) {
-                Log::info('Adding database backup to ZIP');
-                $this->addDatabaseBackupToZip($zip, $project);
+                Log::info('Creating database dump for disaster recovery package');
+                $dbName = $this->createDatabaseDumpToStaging($stagingDir, $project);
             }
 
-            // Close the ZIP archive
-            $closeResult = $zip->close();
-            $zip = null; // Set to null after closing
-            
-            if (!$closeResult) {
-                throw new Exception('Failed to close ZIP archive');
-            }
-            
-            Log::info('ZIP file created successfully', ['size' => filesize($tempPath)]);
+            // Generate disaster recovery instructions and scripts inside staging
+            $this->generateDisasterRecoveryAssets($stagingDir, $project, $fileName, (bool) $this->backup->include_database, $dbName);
 
-            // Verify ZIP was created
+            // Build .tar.gz archive
+            Log::info('Building compressed tar.gz archive with disaster recovery assets', [
+                'temp_path' => $tempPath,
+                'source_dir' => $sourceDir,
+                'staging_dir' => $stagingDir,
+            ]);
+            $this->buildTarGzArchive($tempPath, $sourceDir, $stagingDir);
+
+            // Clean up staging directory
+            $this->deleteDirectory($stagingDir);
+            $stagingDir = null;
+
+            // Verify archive was created
             if (!file_exists($tempPath) || filesize($tempPath) === 0) {
-                throw new Exception('ZIP file was not created or is empty');
+                throw new Exception('Backup archive was not created or is empty');
             }
 
             // Generate checksum
             $checksum = hash_file('sha256', $tempPath);
             $fileSize = filesize($tempPath);
 
-            Log::info('ZIP file details', [
+            Log::info('Backup archive created successfully', [
                 'size' => $fileSize,
                 'checksum' => $checksum
             ]);
@@ -235,6 +227,11 @@ class BackupProjectJob implements ShouldQueue
                 }
             }
             
+            // Clean up staging directory if it still exists
+            if (isset($stagingDir) && $stagingDir && is_dir($stagingDir)) {
+                $this->deleteDirectory($stagingDir);
+            }
+
             // Clean up temp file if it still exists
             if ($tempPath && file_exists($tempPath)) {
                 try {
@@ -301,6 +298,333 @@ class BackupProjectJob implements ShouldQueue
         }
     }
 
+    private function createDatabaseDumpToStaging(string $stagingDir, $project): ?string
+    {
+        $dbConfig = $this->backup->database_config;
+        $dbCredentials = $this->getDatabaseCredentials($dbConfig, $project);
+
+        if (!$dbCredentials) {
+            Log::warning('Could not retrieve database credentials for backup', [
+                'backup_id' => $this->backup->id,
+                'source' => $dbConfig['source'] ?? 'unknown'
+            ]);
+            return null;
+        }
+
+        $dumpPath = $stagingDir . DIRECTORY_SEPARATOR . 'database.sql';
+        $success = $this->createDatabaseDump($dbCredentials, $dumpPath, $dbConfig ?? []);
+
+        return $success ? ($dbCredentials['database'] ?? 'database') : null;
+    }
+
+    /**
+     * Generate standalone disaster recovery documentation and executable restore scripts
+     */
+    private function generateDisasterRecoveryAssets(string $stagingDir, $project, string $archiveName, bool $hasDb, ?string $dbName): void
+    {
+        $projectName = $project->name ?? 'Application';
+        $targetDb = $dbName ?? 'database_name';
+        $dateStr = now()->toDateTimeString();
+        $dbNotice = $hasDb ? 'Yes (`database.sql`)' : 'No';
+
+        // 1. Standalone Disaster Recovery Guide (RESTORE.md)
+        $restoreMd = <<<MARKDOWN
+# 🛡️ Standalone Disaster Recovery Guide: {$projectName}
+
+**Generated on:** {$dateStr}  
+**Archive:** `{$archiveName}`  
+**Includes Database:** {$dbNotice}  
+
+If this server was compromised, lost, or inaccessible, you can restore this entire project on any clean Linux, macOS, or Windows server directly using this archive without needing LaraSafe installed.
+
+---
+
+## ⚡ Method 1: Automated 1-Click Restore
+
+### On Linux or macOS:
+1. Extract the archive into your target directory:
+   ```bash
+   tar -xzf {$archiveName} -C /var/www/{$projectName}
+   cd /var/www/{$projectName}
+   ```
+2. Execute the included restoration script:
+   ```bash
+   bash restore.sh
+   ```
+
+### On Windows:
+1. Extract the archive into your target directory.
+2. In Command Prompt, run:
+   ```cmd
+   restore.bat
+   ```
+
+---
+
+## 🛠️ Method 2: Manual Restore
+
+### Step 1: Extract Files
+```bash
+tar -xzf {$archiveName} -C /path/to/destination
+cd /path/to/destination
+```
+
+### Step 2: Restore Database
+If this backup contains `database.sql`:
+```bash
+# 1. Create target database:
+mysql -h 127.0.0.1 -u root -p -e "CREATE DATABASE IF NOT EXISTS \`{$targetDb}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+# 2. Import database dump:
+mysql -h 127.0.0.1 -u root -p {$targetDb} < database.sql
+```
+
+### Step 3: Application Setup
+```bash
+# 1. Prepare environment:
+cp .env.example .env
+
+# 2. Update DB credentials in .env:
+# DB_HOST=127.0.0.1
+# DB_DATABASE={$targetDb}
+# DB_USERNAME=your_db_username
+# DB_PASSWORD=your_db_password
+
+# 3. Install composer packages & set up keys:
+composer install --no-dev --optimize-autoloader
+php artisan key:generate
+php artisan storage:link
+php artisan config:cache
+```
+
+---
+*Created by LaraSafe Backup & Disaster Recovery System*
+MARKDOWN;
+
+        file_put_contents($stagingDir . DIRECTORY_SEPARATOR . 'RESTORE.md', $restoreMd);
+
+        // 2. Linux / macOS Bash Restore Script (restore.sh)
+        $restoreSh = <<<BASH
+#!/usr/bin/env bash
+set -e
+
+echo "=========================================================="
+echo "  LaraSafe Standalone Disaster Recovery"
+echo "  Project: {$projectName}"
+echo "=========================================================="
+echo ""
+
+if [ ! -f "database.sql" ]; then
+    echo "[!] database.sql was not found in this archive."
+    echo "[*] Project files are restored and ready."
+    exit 0
+fi
+
+echo "Enter target database credentials:"
+read -p "Database Host [127.0.0.1]: " DB_HOST
+DB_HOST=\${DB_HOST:-127.0.0.1}
+read -p "Database Port [3306]: " DB_PORT
+DB_PORT=\${DB_PORT:-3306}
+read -p "Database Name [{$targetDb}]: " DB_NAME
+DB_NAME=\${DB_NAME:-{$targetDb}}
+read -p "Database User [root]: " DB_USER
+DB_USER=\${DB_USER:-root}
+read -s -p "Database Password: " DB_PASS
+echo ""
+
+echo "[*] Creating database '\$DB_NAME' if not exists..."
+MYSQL_PWD="\$DB_PASS" mysql -h"\$DB_HOST" -P"\$DB_PORT" -u"\$DB_USER" -e "CREATE DATABASE IF NOT EXISTS \\\`\$DB_NAME\\\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+echo "[*] Importing database.sql into '\$DB_NAME'..."
+MYSQL_PWD="\$DB_PASS" mysql -h"\$DB_HOST" -P"\$DB_PORT" -u"\$DB_USER" "\$DB_NAME" < database.sql
+
+echo "✓ Database successfully restored!"
+echo ""
+echo "Next: Configure .env and run 'composer install'."
+BASH;
+
+        $shPath = $stagingDir . DIRECTORY_SEPARATOR . 'restore.sh';
+        file_put_contents($shPath, str_replace("\r\n", "\n", $restoreSh));
+        @chmod($shPath, 0755);
+
+        // 3. Windows Batch Restore Script (restore.bat)
+        $restoreBat = <<<BAT
+@echo off
+echo ==========================================================
+echo   LaraSafe Standalone Disaster Recovery
+echo   Project: {$projectName}
+echo ==========================================================
+echo.
+
+if not exist "database.sql" (
+    echo Notice: database.sql was not found in this archive.
+    echo Project files are restored and ready.
+    pause
+    exit /b 0
+)
+
+set /p DB_HOST="Database Host [127.0.0.1]: "
+if "%DB_HOST%"=="" set DB_HOST=127.0.0.1
+set /p DB_PORT="Database Port [3306]: "
+if "%DB_PORT%"=="" set DB_PORT=3306
+set /p DB_NAME="Database Name [{$targetDb}]: "
+if "%DB_NAME%"=="" set DB_NAME={$targetDb}
+set /p DB_USER="Database User [root]: "
+if "%DB_USER%"=="" set DB_USER=root
+set /p DB_PASS="Database Password: "
+echo.
+
+echo [*] Creating database '%DB_NAME%' if not exists...
+set MYSQL_PWD=%DB_PASS%
+mysql -h%DB_HOST% -P%DB_PORT% -u%DB_USER% -e "CREATE DATABASE IF NOT EXISTS `%DB_NAME%` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+echo [*] Importing database.sql into '%DB_NAME%'...
+mysql -h%DB_HOST% -P%DB_PORT% -u%DB_USER% %DB_NAME% < database.sql
+set MYSQL_PWD=
+
+echo [OK] Database successfully restored!
+echo.
+pause
+BAT;
+
+        file_put_contents($stagingDir . DIRECTORY_SEPARATOR . 'restore.bat', $restoreBat);
+    }
+
+    /**
+     * Build compressed .tar.gz archive
+     */
+    private function buildTarGzArchive(string $archivePath, string $sourceDir, string $stagingDir): void
+    {
+        if ($this->isTarCliAvailable()) {
+            $sourceDirNorm = rtrim(str_replace('\\', '/', $sourceDir), '/');
+            $stagingDirNorm = rtrim(str_replace('\\', '/', $stagingDir), '/');
+            $archivePathNorm = str_replace('\\', '/', $archivePath);
+
+            $cmd = sprintf(
+                'tar -czf %s --exclude="vendor" --exclude="node_modules" --exclude=".git" --exclude="storage/app/*" --exclude="storage/framework/*" --exclude="storage/logs/*" -C %s . -C %s .',
+                escapeshellarg($archivePathNorm),
+                escapeshellarg($sourceDirNorm),
+                escapeshellarg($stagingDirNorm)
+            );
+
+            $output = [];
+            $returnCode = 0;
+            exec($cmd, $output, $returnCode);
+
+            if ($returnCode === 0 && file_exists($archivePath) && filesize($archivePath) > 0) {
+                Log::info("Created .tar.gz archive via system tar: {$archivePath} (" . filesize($archivePath) . " bytes)");
+                return;
+            }
+
+            Log::warning("System tar returned code {$returnCode}, falling back to PharData", [
+                'output' => implode("\n", $output)
+            ]);
+        }
+
+        // Fallback: PharData or ZipArchive
+        try {
+            $this->buildTarGzViaPhar($archivePath, $sourceDir, $stagingDir);
+        } catch (\Throwable $e) {
+            Log::warning("PharData failed to build tar.gz: " . $e->getMessage() . ", falling back to ZipArchive");
+            $this->buildZipArchive($archivePath, $sourceDir, $stagingDir);
+        }
+    }
+
+    private function isTarCliAvailable(): bool
+    {
+        $output = [];
+        $returnCode = 1;
+        @exec('tar --version', $output, $returnCode);
+        return $returnCode === 0;
+    }
+
+    private function buildTarGzViaPhar(string $archivePath, string $sourceDir, string $stagingDir): void
+    {
+        $tarPath = preg_replace('/\.gz$/i', '', $archivePath);
+        if ($tarPath === $archivePath) {
+            $tarPath .= '.tar';
+        }
+
+        if (file_exists($tarPath)) {
+            @unlink($tarPath);
+        }
+        if (file_exists($archivePath)) {
+            @unlink($archivePath);
+        }
+
+        $tar = new \PharData($tarPath);
+
+        // Add files from sourceDir
+        $files = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($sourceDir, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::LEAVES_ONLY
+        );
+
+        foreach ($files as $file) {
+            if (!$file->isFile()) continue;
+            $realPath = $file->getRealPath();
+            $relative = ltrim(substr($realPath, strlen($sourceDir)), '/\\');
+            $normalized = str_replace('\\', '/', $relative);
+
+            if (
+                str_contains($normalized, 'node_modules') ||
+                str_contains($normalized, '.git') ||
+                str_contains($normalized, 'vendor') ||
+                str_starts_with($normalized, 'storage/app') ||
+                str_starts_with($normalized, 'storage/framework') ||
+                str_starts_with($normalized, 'storage/logs') ||
+                !is_readable($realPath)
+            ) {
+                continue;
+            }
+
+            $tar->addFile($realPath, $normalized);
+        }
+
+        // Add recovery files from stagingDir
+        if (is_dir($stagingDir)) {
+            $stagingFiles = scandir($stagingDir);
+            foreach ($stagingFiles as $sFile) {
+                if ($sFile === '.' || $sFile === '..') continue;
+                $sRealPath = $stagingDir . DIRECTORY_SEPARATOR . $sFile;
+                if (is_file($sRealPath) && is_readable($sRealPath)) {
+                    $tar->addFile($sRealPath, $sFile);
+                }
+            }
+        }
+
+        // Compress to .gz
+        $tar->compress(\Phar::GZ);
+        unset($tar);
+        if (file_exists($tarPath)) {
+            @unlink($tarPath);
+        }
+    }
+
+    private function buildZipArchive(string $archivePath, string $sourceDir, string $stagingDir): void
+    {
+        $zip = new ZipArchive();
+        $res = $zip->open($archivePath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+        if ($res !== true) {
+            throw new Exception("Failed to open ZIP archive for writing. Error code: {$res}");
+        }
+
+        $this->addProjectFilesToZip($zip, $sourceDir);
+
+        if (is_dir($stagingDir)) {
+            $stagingFiles = scandir($stagingDir);
+            foreach ($stagingFiles as $sFile) {
+                if ($sFile === '.' || $sFile === '..') continue;
+                $sRealPath = $stagingDir . DIRECTORY_SEPARATOR . $sFile;
+                if (is_file($sRealPath) && is_readable($sRealPath)) {
+                    $zip->addFile($sRealPath, $sFile);
+                }
+            }
+        }
+
+        $zip->close();
+    }
+
     private function addProjectFilesToZip(ZipArchive $zip, string $sourceDir): void
     {
         $fileCount = 0;
@@ -316,8 +640,9 @@ class BackupProjectJob implements ShouldQueue
                 if (!$file->isFile()) {
                     continue;
                 }
-                
-                // Normalize slashes for comparison
+
+                $filePath = $file->getRealPath();
+                $relativePath = ltrim(substr($filePath, strlen($sourceDir)), '/\\');
                 $normalizedRelative = str_replace('\\', '/', $relativePath);
                 
                 // Skip certain directories/files to prevent bloat and recursive loops
@@ -333,7 +658,6 @@ class BackupProjectJob implements ShouldQueue
                     continue;
                 }
                 
-                // Skip files that can't be read
                 if (!is_readable($filePath)) {
                     Log::warning("Skipping unreadable file: {$relativePath}");
                     $skippedCount++;
@@ -356,61 +680,17 @@ class BackupProjectJob implements ShouldQueue
         }
     }
 
-    private function addDatabaseBackupToZip(ZipArchive $zip, $project): void
+    private function deleteDirectory(string $dir): bool
     {
-        $tempDumpPath = null;
-        
-        try {
-            $dbConfig = $this->backup->database_config;
-            $dbCredentials = $this->getDatabaseCredentials($dbConfig, $project);
-    
-            if (!$dbCredentials) {
-                Log::warning('Could not retrieve database credentials', [
-                    'backup_id' => $this->backup->id,
-                    'source' => $dbConfig['source'] ?? 'unknown'
-                ]);
-                return;
-            }
-    
-            $timestamp = now()->format('Y_m_d_H_i_s');
-            $databaseName = $dbCredentials['database'] ?? 'database';
-            $dumpFileName = "{$databaseName}_backup_{$timestamp}.sql";
-            $tempDumpPath = storage_path("app/temp/{$dumpFileName}");
-            
-            $tempDir = dirname($tempDumpPath);
-            if (!is_dir($tempDir)) {
-                mkdir($tempDir, 0755, true);
-            }
-    
-            if ($this->createDatabaseDump($dbCredentials, $tempDumpPath, $dbConfig)) {
-                $zip->addFile($tempDumpPath, $dumpFileName);
-                
-                Log::info('Database backup added to zip', [
-                    'backup_id' => $this->backup->id,
-                    'dump_file' => $dumpFileName,
-                    'size' => filesize($tempDumpPath)
-                ]);
-            }
-    
-        } catch (Exception $e) {
-            Log::error('Error creating database backup', [
-                'backup_id' => $this->backup->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-        } finally {
-            // Clean up database dump file
-            if ($tempDumpPath && file_exists($tempDumpPath)) {
-                try {
-                    @unlink($tempDumpPath);
-                    Log::info('Cleaned up database dump file');
-                } catch (Exception $e) {
-                    Log::warning('Failed to clean up database dump', [
-                        'path' => $tempDumpPath
-                    ]);
-                }
-            }
+        if (!file_exists($dir)) return true;
+        if (!is_dir($dir)) return @unlink($dir);
+
+        $files = array_diff(scandir($dir) ?: [], ['.', '..']);
+        foreach ($files as $file) {
+            $fullPath = $dir . DIRECTORY_SEPARATOR . $file;
+            is_dir($fullPath) ? $this->deleteDirectory($fullPath) : @unlink($fullPath);
         }
+        return @rmdir($dir);
     }
 
     private function getDatabaseCredentials($dbConfig, $project): ?array
@@ -540,50 +820,72 @@ class BackupProjectJob implements ShouldQueue
                 return false;
             }
     
-            // Build mysqldump command
-            $command = sprintf(
-                'mysqldump -h%s -P%d -u%s %s %s > %s 2>&1',
-                escapeshellarg($host),
-                $port,
-                escapeshellarg($username),
-                $password ? '-p' . escapeshellarg($password) : '',
-                escapeshellarg($database),
-                escapeshellarg($outputPath)
-            );
-    
+            // Build mysqldump arguments without password on CLI to avoid leaking in ps/tasklist
+            $args = [
+                'mysqldump',
+                '--host=' . $host,
+                '--port=' . (int) $port,
+                '--user=' . $username,
+                '--single-transaction',
+                '--quick',
+                '--default-character-set=utf8mb4',
+            ];
+
             // Add specific tables if selected
-            if (isset($dbConfig['tables']) && $dbConfig['tables'] === 'selected' && isset($dbConfig['selected_tables'])) {
-                $tables = implode(' ', array_map('escapeshellarg', $dbConfig['selected_tables']));
-                $command = str_replace(
-                    escapeshellarg($database),
-                    escapeshellarg($database) . ' ' . $tables,
-                    $command
-                );
+            if (isset($dbConfig['tables']) && $dbConfig['tables'] === 'selected' && !empty($dbConfig['selected_tables'])) {
+                $args[] = $database;
+                foreach ($dbConfig['selected_tables'] as $tbl) {
+                    $args[] = trim($tbl);
+                }
+            } else {
+                $args[] = $database;
             }
-    
-            $output = [];
-            $returnCode = 0;
-            exec($command, $output, $returnCode);
-    
+
+            $descriptors = [
+                0 => ['pipe', 'r'],              // stdin
+                1 => ['file', $outputPath, 'w'], // stdout -> clean SQL dump ONLY
+                2 => ['pipe', 'w'],              // stderr -> separate warnings/errors
+            ];
+
+            $env = array_merge($_ENV, $_SERVER, [
+                'MYSQL_PWD' => (string) $password,
+            ]);
+
+            $command = implode(' ', array_map('escapeshellarg', $args));
+            $process = proc_open($command, $descriptors, $pipes, null, $env);
+
+            if (!is_resource($process)) {
+                Log::error('Failed to start mysqldump process');
+                return false;
+            }
+
+            fclose($pipes[0]);
+            $stderr = stream_get_contents($pipes[2]);
+            fclose($pipes[2]);
+            $returnCode = proc_close($process);
+
             if ($returnCode !== 0) {
                 Log::error('mysqldump command failed', [
                     'return_code' => $returnCode,
-                    'output' => implode("\n", $output)
+                    'stderr' => $stderr
                 ]);
+                if (file_exists($outputPath)) {
+                    @unlink($outputPath);
+                }
                 return false;
             }
-    
+
             if (!file_exists($outputPath) || filesize($outputPath) === 0) {
-                Log::error('Database dump file is missing or empty', ['path' => $outputPath]);
+                Log::error('Database dump file is missing or empty', ['stderr' => $stderr]);
                 return false;
             }
-    
+
             Log::info('Database dump created successfully', [
                 'path' => $outputPath,
                 'size' => filesize($outputPath)
             ]);
             return true;
-    
+
         } catch (Exception $e) {
             Log::error('Error creating database dump', [
                 'error' => $e->getMessage(),

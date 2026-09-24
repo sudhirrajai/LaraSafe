@@ -27,10 +27,52 @@ class BackupController extends Controller
         $this->storageService = $storageService;
     }
 
+    protected function authorizeBackup(Backup $backup): void
+    {
+        $user = auth()->user();
+        if ($user && ($user->hasRole('admin') || $user->can('manage users'))) {
+            return;
+        }
+        $project = $backup->project;
+        if ($user && $project && $project->user_id && $project->user_id !== $user->id) {
+            abort(403, 'Unauthorized access to this backup.');
+        }
+    }
+
+    protected function authorizeCreatedBackup(CreatedBackup $createdBackup): void
+    {
+        $user = auth()->user();
+        if ($user && ($user->hasRole('admin') || $user->can('manage users'))) {
+            return;
+        }
+        $project = $createdBackup->backup?->project;
+        if ($user && $project && $project->user_id && $project->user_id !== $user->id) {
+            abort(403, 'Unauthorized access to this backup file.');
+        }
+    }
+
+    protected function authorizeProject(Project $project): void
+    {
+        $user = auth()->user();
+        if ($user && ($user->hasRole('admin') || $user->can('manage users'))) {
+            return;
+        }
+        if ($user && $project->user_id && $project->user_id !== $user->id) {
+            abort(403, 'Unauthorized access to this project.');
+        }
+    }
+
     public function index()
     {
-        $backups = Backup::with('project', 'createdBackups')->get();
-        logger($backups->toArray());
+        $user = auth()->user();
+        $query = Backup::with('project', 'createdBackups');
+        if ($user && !$user->hasRole('admin') && !$user->can('manage users')) {
+            $query->whereHas('project', function ($q) use ($user) {
+                $q->where('user_id', $user->id)
+                  ->orWhereNull('user_id');
+            });
+        }
+        $backups = $query->get();
         return Inertia::render('Backups/Backups', [
             'backups' => $backups,
         ]);
@@ -38,7 +80,15 @@ class BackupController extends Controller
 
     public function createBackup()
     {
-        $projects = Project::all();
+        $user = auth()->user();
+        $query = Project::query();
+        if ($user && !$user->hasRole('admin') && !$user->can('manage users')) {
+            $query->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id)
+                  ->orWhereNull('user_id');
+            });
+        }
+        $projects = $query->get();
         return Inertia::render('Backups/CreateBackup', [
             'projects' => $projects,
         ]);
@@ -46,15 +96,18 @@ class BackupController extends Controller
 
     public function storeBackup(Request $request)
     {
+        $project = Project::findOrFail($request->project_id);
+        $this->authorizeProject($project);
+
         $rules = [
             'project_id'       => 'required|exists:projects,id',
             'file_name'        => 'required|string|max:255',
-            'storage_disk'     => 'required|in:local,s3,b2,wasabi,other', // Fixed to include b2,wasabi
+            'storage_disk'     => 'required|in:local,s3,b2,wasabi,other',
             'include_database' => 'boolean',
             'frequency'        => 'nullable|in:daily,weekly,monthly',
             'time'             => 'nullable|date_format:H:i',
-            'auto_delete_enabled' => 'boolean', // ADD THIS
-            'auto_delete_after_days' => 'nullable|integer|min:1', // ADD THIS
+            'auto_delete_enabled' => 'boolean',
+            'auto_delete_after_days' => 'nullable|integer|min:1',
         ];
 
         $includeDatabase = (bool) $request->input('include_database');
@@ -160,6 +213,7 @@ class BackupController extends Controller
         try {
             $pdo = new \PDO($dsn, $request->db_username, $request->db_password, [
                 \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+                \PDO::ATTR_TIMEOUT => 5,
             ]);
             return response()->json(['success' => true, 'message' => 'Connection successful']);
         } catch (\PDOException $e) {
@@ -169,13 +223,16 @@ class BackupController extends Controller
 
     public function run(Project $project)
     {
+        $this->authorizeProject($project);
         $this->backupService->runBackup($project);
         return back()->with('status', 'Backup created successfully!');
     }
 
     public function retryBackup($id)
     {
-        $backup = Backup::findOrFail($id);
+        $backup = Backup::with('project')->findOrFail($id);
+        $this->authorizeBackup($backup);
+
         $backup->update(['status' => 'pending']);
 
         Mail::to($backup->project->user->email ?? 'sudhirrajai@proton.me')
@@ -192,10 +249,23 @@ class BackupController extends Controller
     {
         try {
             $createdBackup = CreatedBackup::with('backup.project')->findOrFail($id);
+            $this->authorizeCreatedBackup($createdBackup);
+
+            // Path traversal guard
+            if (empty($createdBackup->file_path) || str_contains($createdBackup->file_path, '..') || str_contains($createdBackup->file_path, "\0")) {
+                abort(400, 'Invalid backup file path.');
+            }
+
             $disk = $createdBackup->storage_disk ?? 'local';
+            $timestamp = $createdBackup->created_at ? $createdBackup->created_at->format('Y-m-d_H-i-s') : now()->format('Y-m-d_H-i-s');
+            $ext = str_ends_with($createdBackup->file_name, '.tar.gz') 
+                ? 'tar.gz' 
+                : (pathinfo($createdBackup->file_name, PATHINFO_EXTENSION) ?: 'tar.gz');
+            $projectName = $createdBackup->backup->project->name ?? 'project';
+            $downloadName = "{$projectName}_{$timestamp}.{$ext}";
+            $headers = $ext === 'tar.gz' ? ['Content-Type' => 'application/gzip'] : [];
 
             if ($disk === 'local') {
-                // Local storage download
                 $filePath = storage_path("app/{$createdBackup->file_path}");
 
                 if (!file_exists($filePath)) {
@@ -219,19 +289,16 @@ class BackupController extends Controller
                     }
                 }
 
-                $timestamp = $createdBackup->created_at->format('Y-m-d_H-i-s');
-                $downloadName = "{$createdBackup->backup->project->name}_{$timestamp}.zip";
-
                 \Log::info("Backup downloaded", [
                     'backup_id' => $id,
-                    'project' => $createdBackup->backup->project->name,
+                    'project' => $projectName,
                     'storage' => 'local'
                 ]);
 
-                return response()->download($filePath, $downloadName);
+                return response()->download($filePath, $downloadName, $headers);
             } else {
                 // Cloud storage download - download to temp first
-                $tempPath = storage_path("app/temp/download_{$id}_{$createdBackup->file_name}.zip");
+                $tempPath = storage_path("app/temp/download_{$id}_{$createdBackup->file_name}");
                 $tempDir = dirname($tempPath);
 
                 if (!is_dir($tempDir)) {
@@ -267,9 +334,6 @@ class BackupController extends Controller
                     }
                 }
 
-                $timestamp = $createdBackup->created_at->format('Y-m-d_H-i-s');
-                $downloadName = "{$createdBackup->backup->project->name}_{$timestamp}.zip";
-
                 \Log::info("Cloud backup downloaded successfully", [
                     'backup_id' => $id,
                     'storage' => $disk,
@@ -277,8 +341,10 @@ class BackupController extends Controller
                 ]);
 
                 // Delete temp file after download
-                return response()->download($tempPath, $downloadName)->deleteFileAfterSend(true);
+                return response()->download($tempPath, $downloadName, $headers)->deleteFileAfterSend(true);
             }
+        } catch (\Symfony\Component\HttpKernel\Exception\HttpExceptionInterface $e) {
+            throw $e;
         } catch (\Exception $e) {
             \Log::error("Download failed", [
                 'backup_id' => $id,
@@ -296,6 +362,8 @@ class BackupController extends Controller
         if (!$backup) {
             return redirect()->back()->with('error', 'Backup not found');
         }
+
+        $this->authorizeBackup($backup);
 
         try {
             \DB::beginTransaction();
@@ -392,6 +460,7 @@ class BackupController extends Controller
     public function destroyCreatedBackup($id)
     {
         $createdBackup = CreatedBackup::with(['backup.project'])->findOrFail($id);
+        $this->authorizeCreatedBackup($createdBackup);
 
         try {
             $fileName = $createdBackup->file_name;
@@ -482,48 +551,49 @@ class BackupController extends Controller
     public function edit($id)
     {
         $backup = Backup::with('project')->findOrFail($id);
-        $projects = Project::all();
+        $this->authorizeBackup($backup);
 
-        // Decrypt credentials if they exist
+        $user = auth()->user();
+        $projectsQuery = Project::query();
+        if ($user && !$user->hasRole('admin') && !$user->can('manage users')) {
+            $projectsQuery->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id)
+                  ->orWhereNull('user_id');
+            });
+        }
+        $projects = $projectsQuery->get();
+
+        // Decrypt credentials if they exist and mask password
         if (!empty($backup->database_config)) {
             $dbConfig = $backup->database_config;
 
             if (!empty($dbConfig['credentials'])) {
                 try {
-                    // Check if credentials is a string (encrypted) or already an array
                     if (is_string($dbConfig['credentials'])) {
-                        // It's encrypted, decrypt it
                         $decrypted = decrypt($dbConfig['credentials']);
-
-                        // The decrypted value should be JSON, decode it
                         $decoded = json_decode($decrypted, true);
 
                         if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
                             $dbConfig['credentials'] = $decoded;
                         } else {
-                            \Log::warning("Invalid JSON format in decrypted credentials for backup ID {$id}");
                             $dbConfig['credentials'] = null;
                         }
-                    } elseif (is_array($dbConfig['credentials'])) {
-                        // Already decrypted/decoded (possibly from model casting)
-                        // No action needed, it's ready to use
-                        \Log::info("Credentials already in array format for backup ID {$id}");
-                    } else {
-                        \Log::warning("Unexpected credentials format for backup ID {$id}");
-                        $dbConfig['credentials'] = null;
                     }
-                } catch (\Illuminate\Contracts\Encryption\DecryptException $e) {
-                    \Log::warning("Decryption failed for backup ID {$id}: " . $e->getMessage());
-                    $dbConfig['credentials'] = null;
+
+                    // Mask sensitive password before sending to frontend
+                    if (isset($dbConfig['credentials']) && is_array($dbConfig['credentials'])) {
+                        if (!empty($dbConfig['credentials']['password'])) {
+                            $dbConfig['credentials']['password'] = '********';
+                        }
+                    }
                 } catch (\Throwable $e) {
-                    \Log::error("Unexpected error processing credentials for backup ID {$id}: " . $e->getMessage());
+                    \Log::warning("Decryption failed for backup ID {$id}: " . $e->getMessage());
                     $dbConfig['credentials'] = null;
                 }
             } else {
                 $dbConfig['credentials'] = null;
             }
 
-            // Reassign the modified config back to the model
             $backup->database_config = $dbConfig;
         }
 
@@ -535,7 +605,8 @@ class BackupController extends Controller
 
     public function updateBackup(Request $request, $id)
     {
-        $backup = Backup::findOrFail($id);
+        $backup = Backup::with('project')->findOrFail($id);
+        $this->authorizeBackup($backup);
 
         $rules = [
             'project_id'       => 'required|exists:projects,id',
@@ -572,6 +643,10 @@ class BackupController extends Controller
 
         $validated = $request->validate($rules);
 
+        // Check ownership of new project
+        $selectedProject = Project::findOrFail($validated['project_id']);
+        $this->authorizeProject($selectedProject);
+
         // Calculate next backup time if scheduling
         $nextBackup = null;
         if ($validated['frequency'] ?? false) {
@@ -594,13 +669,26 @@ class BackupController extends Controller
             ];
 
             if ($validated['db_source'] === 'custom') {
-                // Encrypt as JSON-safe string
+                // Preserve existing password if not updated or masked
+                $existingPassword = '';
+                if (!empty($backup->database_config['credentials'])) {
+                    try {
+                        $oldCreds = is_string($backup->database_config['credentials'])
+                            ? json_decode(decrypt($backup->database_config['credentials']), true)
+                            : $backup->database_config['credentials'];
+                        $existingPassword = $oldCreds['password'] ?? '';
+                    } catch (\Throwable $e) {}
+                }
+
+                $rawPass = $request->db_password;
+                $finalPassword = ($rawPass === '********' || empty($rawPass)) ? $existingPassword : $rawPass;
+
                 $encryptedCredentials = encrypt(json_encode([
                     'host'     => $request->db_host,
                     'port'     => $request->db_port,
                     'database' => $request->db_name,
                     'username' => $request->db_username,
-                    'password' => $request->db_password,
+                    'password' => $finalPassword,
                 ]));
 
                 $dbConfig['credentials'] = $encryptedCredentials;
@@ -644,6 +732,9 @@ class BackupController extends Controller
      */
     public function viewBackups($id)
     {
+        $backup = Backup::with('project')->findOrFail($id);
+        $this->authorizeBackup($backup);
+
         $backups = CreatedBackup::with('backup.project')
             ->where('backup_id', $id)
             ->orderBy('created_at', 'desc')
@@ -677,6 +768,7 @@ class BackupController extends Controller
     public function destroySubBackup($id)
     {
         $createdBackup = CreatedBackup::with(['backup.project'])->findOrFail($id);
+        $this->authorizeCreatedBackup($createdBackup);
 
         try {
             $fileName = $createdBackup->file_name;

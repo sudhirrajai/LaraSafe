@@ -42,6 +42,9 @@ class RolePermissionSeeder extends Seeder
             'download backup',
             'restore backup',
             'view backup',
+            
+            // Settings Management
+            'manage settings',
         ];
 
         foreach ($permissions as $permission) {
@@ -81,6 +84,7 @@ class RolePermissionSeeder extends Seeder
             'download backup',
             'restore backup',
             'view backup',
+            'manage settings',
         ]);
 
         // User Role - can create and download backups only

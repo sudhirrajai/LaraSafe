@@ -21,9 +21,28 @@ class ProjectsController extends Controller
         $this->storageService = $storageService;
     }
 
+    protected function authorizeProject(Project $project): void
+    {
+        $user = auth()->user();
+        if ($user && ($user->hasRole('admin') || $user->can('manage users'))) {
+            return;
+        }
+        if ($user && $project->user_id && $project->user_id !== $user->id) {
+            abort(403, 'Unauthorized access to this project.');
+        }
+    }
+
     public function index()
     {
-        $projects = Project::all();
+        $user = auth()->user();
+        $query = Project::query();
+        if ($user && !$user->hasRole('admin') && !$user->can('manage users')) {
+            $query->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id)
+                  ->orWhereNull('user_id');
+            });
+        }
+        $projects = $query->get();
         return Inertia::render('Projects/Projects', [
             'projects' => $projects
         ]);
@@ -51,6 +70,7 @@ class ProjectsController extends Controller
             ],
         ]);
 
+        $validation['user_id'] = auth()->id();
         $project = Project::create($validation);
 
         return redirect()->route('manage-projects')->with('success', 'Project created successfully');
@@ -59,15 +79,27 @@ class ProjectsController extends Controller
     public function editProject($id)
     {
         $project = Project::findOrFail($id);
+        $this->authorizeProject($project);
+
+        $projectsQuery = Project::query();
+        $user = auth()->user();
+        if ($user && !$user->hasRole('admin') && !$user->can('manage users')) {
+            $projectsQuery->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id)
+                  ->orWhereNull('user_id');
+            });
+        }
+
         return Inertia::render('Projects/EditProject', [
             'project' => $project,
-            'projects' => Project::all()
+            'projects' => $projectsQuery->get()
         ]);
     }
 
     public function updateProject(Request $request, $id)
     {
         $project = Project::findOrFail($id);
+        $this->authorizeProject($project);
 
         $validation = $request->validate([
             'name' => 'required|string|max:255',
@@ -96,6 +128,8 @@ class ProjectsController extends Controller
         if (!$project) {
             return redirect()->route('manage-projects')->with('error', 'Project not found');
         }
+
+        $this->authorizeProject($project);
 
         try {
             \DB::beginTransaction();
@@ -433,6 +467,8 @@ class ProjectsController extends Controller
                       ->orderBy('created_at', 'desc');
             }
         ])->findOrFail($id);
+
+        $this->authorizeProject($project);
     
         // Get all created backup files for this project
         $createdBackups = CreatedBackup::whereHas('backup', function($query) use ($id) {

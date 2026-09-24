@@ -115,33 +115,25 @@ class RestoreBackupJob implements ShouldQueue
                 mkdir($projectPath, 0755, true);
             }
 
-            // Extract the backup
-            $zip = new ZipArchive;
-            if ($zip->open($filePath) === true) {
-                // Extract files to the project directory
-                $zip->extractTo($projectPath);
-                $zip->close();
+            // Extract the backup archive (supports .tar.gz and legacy .zip)
+            $this->extractArchive($filePath, $projectPath);
 
-                Log::info("Files extracted successfully", ['project_path' => $projectPath]);
+            Log::info("Files extracted successfully", ['project_path' => $projectPath]);
 
-                // Check for and restore database dump
-                $this->restoreDatabase($projectPath);
+            // Check for and restore database dump
+            $this->restoreDatabase($projectPath);
 
-                Log::info("Backup restored successfully", [
-                    'backup_id' => $this->createdBackup->id,
-                    'project_id' => $this->createdBackup->backup->project->id,
-                    'storage' => $storageDisk
+            Log::info("Backup restored successfully", [
+                'backup_id' => $this->createdBackup->id,
+                'project_id' => $this->createdBackup->backup->project->id,
+                'storage' => $storageDisk
+            ]);
+
+            // Update backup status if column exists
+            if (\Illuminate\Support\Facades\Schema::hasColumn('backups', 'last_restored_at')) {
+                $this->createdBackup->backup->update([
+                    'last_restored_at' => now()
                 ]);
-
-                // Update backup status if column exists
-                if (\Illuminate\Support\Facades\Schema::hasColumn('backups', 'last_restored_at')) {
-                    $this->createdBackup->backup->update([
-                        'last_restored_at' => now()
-                    ]);
-                }
-
-            } else {
-                throw new Exception("Failed to open backup zip file: {$filePath}");
             }
 
         } catch (Exception $e) {
@@ -201,30 +193,34 @@ class RestoreBackupJob implements ShouldQueue
             // Look for SQL files in the extracted backup
             $sqlFiles = glob($projectPath . '/*.sql');
             
-            if (empty($sqlFiles)) {
-                Log::info("No database dump files found in backup");
-                return;
-            }
+            if (!empty($sqlFiles)) {
+                foreach ($sqlFiles as $sqlFilePath) {
+                    Log::info("Restoring database from dump", ['file' => basename($sqlFilePath)]);
 
-            foreach ($sqlFiles as $sqlFilePath) {
-                Log::info("Restoring database from dump", ['file' => basename($sqlFilePath)]);
+                    // Get database credentials from backup config or extracted project .env
+                    $dbCredentials = $this->getDatabaseCredentials($projectPath);
+                    
+                    if ($dbCredentials) {
+                        $this->importDatabaseDump($sqlFilePath, $dbCredentials);
+                    } else {
+                        Log::error("Database dump found but target database credentials could not be resolved. Skipping DB restore to avoid corrupting host database.", [
+                            'file' => basename($sqlFilePath),
+                            'backup_id' => $this->createdBackup->id,
+                            'project_path' => $projectPath
+                        ]);
+                    }
 
-                // Get database credentials from backup config or extracted project .env
-                $dbCredentials = $this->getDatabaseCredentials($projectPath);
-                
-                if ($dbCredentials) {
-                    $this->importDatabaseDump($sqlFilePath, $dbCredentials);
-                } else {
-                    Log::error("Database dump found but target database credentials could not be resolved. Skipping DB restore to avoid corrupting host database.", [
-                        'file' => basename($sqlFilePath),
-                        'backup_id' => $this->createdBackup->id,
-                        'project_path' => $projectPath
-                    ]);
+                    // Remove the SQL file after import or attempted restore
+                    @unlink($sqlFilePath);
                 }
-
-                // Remove the SQL file after import or attempted restore
-                @unlink($sqlFilePath);
+            } else {
+                Log::info("No database dump files found in backup");
             }
+
+            // Clean up standalone recovery scripts from project directory if present
+            if (file_exists($projectPath . '/restore.sh')) @unlink($projectPath . '/restore.sh');
+            if (file_exists($projectPath . '/restore.bat')) @unlink($projectPath . '/restore.bat');
+            if (file_exists($projectPath . '/RESTORE.md')) @unlink($projectPath . '/RESTORE.md');
 
         } catch (Exception $e) {
             Log::error("Database restore failed", [
@@ -233,6 +229,64 @@ class RestoreBackupJob implements ShouldQueue
             ]);
             // Don't throw - allow file restore to succeed even if DB fails
         }
+    }
+
+    /**
+     * Extract backup archive supporting both .tar.gz and legacy .zip formats
+     */
+    private function extractArchive(string $archivePath, string $destinationPath): void
+    {
+        $isTar = str_ends_with($archivePath, '.tar.gz') || 
+                 str_ends_with($archivePath, '.tgz') || 
+                 str_ends_with($archivePath, '.tar');
+
+        if ($isTar) {
+            if ($this->isTarCliAvailable()) {
+                $tarCmd = sprintf(
+                    'tar -xzf %s -C %s',
+                    escapeshellarg(str_replace('\\', '/', $archivePath)),
+                    escapeshellarg(str_replace('\\', '/', $destinationPath))
+                );
+                $output = [];
+                $returnCode = 0;
+                exec($tarCmd, $output, $returnCode);
+
+                if ($returnCode === 0) {
+                    Log::info("Extracted tar.gz via system tar to {$destinationPath}");
+                    return;
+                }
+                Log::warning("System tar extract returned {$returnCode}, attempting PharData fallback");
+            }
+
+            try {
+                $phar = new \PharData($archivePath);
+                $phar->extractTo($destinationPath, null, true);
+                Log::info("Extracted tar.gz via PharData to {$destinationPath}");
+                return;
+            } catch (\Exception $e) {
+                throw new \Exception("Failed to extract tar.gz archive: " . $e->getMessage());
+            }
+        }
+
+        // Standard ZIP extraction for legacy archives
+        $zip = new ZipArchive();
+        $res = $zip->open($archivePath);
+        if ($res === true) {
+            $zip->extractTo($destinationPath);
+            $zip->close();
+            Log::info("Extracted ZIP archive to {$destinationPath}");
+            return;
+        }
+
+        throw new Exception("Failed to open backup ZIP archive. Error code: {$res}");
+    }
+
+    private function isTarCliAvailable(): bool
+    {
+        $output = [];
+        $returnCode = 1;
+        @exec('tar --version', $output, $returnCode);
+        return $returnCode === 0;
     }
 
     /**
@@ -318,50 +372,72 @@ class RestoreBackupJob implements ShouldQueue
         } catch (Exception $e) {
             Log::error("Failed to parse target .env credentials: " . $e->getMessage());
             return null;
+        }
     }
 
     /**
-     * Import database dump using mysqldump
+     * Import database dump using mysql via secure proc_open
      */
     private function importDatabaseDump(string $sqlFilePath, array $credentials): bool
     {
         try {
-            $host = $credentials['host'] ?? 'localhost';
-            $port = $credentials['port'] ?? 3306;
+            $host = $credentials['host'] ?? '127.0.0.1';
+            $port = (int) ($credentials['port'] ?? 3306);
             $database = $credentials['database'] ?? '';
             $username = $credentials['username'] ?? '';
-            $password = $credentials['password'] ?? '';
+            $password = (string) ($credentials['password'] ?? '');
 
-            // Use mysql command to import
-            $command = sprintf(
-                'mysql -h%s -P%d -u%s %s %s < %s 2>&1',
-                escapeshellarg($host),
-                $port,
-                escapeshellarg($username),
-                $password ? '-p' . escapeshellarg($password) : '',
-                escapeshellarg($database),
-                escapeshellarg($sqlFilePath)
-            );
+            if (!file_exists($sqlFilePath) || filesize($sqlFilePath) === 0) {
+                Log::error('Database SQL file missing or empty for restore', ['file' => $sqlFilePath]);
+                return false;
+            }
 
-            $output = [];
-            $returnCode = 0;
-            exec($command, $output, $returnCode);
+            $args = [
+                'mysql',
+                '--host=' . $host,
+                '--port=' . $port,
+                '--user=' . $username,
+                '--default-character-set=utf8mb4',
+                $database,
+            ];
+
+            $descriptors = [
+                0 => ['file', $sqlFilePath, 'r'], // stdin directly from SQL file
+                1 => ['pipe', 'w'],                // stdout
+                2 => ['pipe', 'w'],                // stderr
+            ];
+
+            $env = array_merge($_ENV, $_SERVER, [
+                'MYSQL_PWD' => $password,
+            ]);
+
+            $command = implode(' ', array_map('escapeshellarg', $args));
+            $process = proc_open($command, $descriptors, $pipes, null, $env);
+
+            if (!is_resource($process)) {
+                Log::error('Failed to spawn mysql restore process');
+                return false;
+            }
+
+            $stdout = stream_get_contents($pipes[1]);
+            fclose($pipes[1]);
+            $stderr = stream_get_contents($pipes[2]);
+            fclose($pipes[2]);
+            $returnCode = proc_close($process);
 
             if ($returnCode !== 0) {
-                Log::error('Database import command failed', [
-                    'return_code' => $returnCode,
-                    'output' => implode("\n", $output)
+                Log::error('Database restore via mysql failed with exit code ' . $returnCode, [
+                    'stderr' => $stderr,
+                    'stdout' => $stdout,
                 ]);
                 return false;
             }
 
-            Log::info('Database imported successfully using custom credentials');
+            Log::info('Database restored successfully from ' . basename($sqlFilePath));
             return true;
 
         } catch (Exception $e) {
-            Log::error('Error importing database', [
-                'error' => $e->getMessage()
-            ]);
+            Log::error('Exception importing database dump: ' . $e->getMessage());
             return false;
         }
     }

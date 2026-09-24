@@ -59,7 +59,7 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/test-cloud-connection', [BackupController::class, 'testCloudConnection'])->name('backups.test-cloud')->middleware('permission:create backup');
     });
 
-    Route::prefix('/settings')->group(function () {
+    Route::prefix('/settings')->middleware('permission:manage settings')->group(function () {
         Route::get('/', [SettingsController::class, 'index'])->name('settings');
         Route::get('/settings', [SettingsController::class, 'getSettings']);
         Route::post('/{type}', [SettingsController::class, 'update']);
