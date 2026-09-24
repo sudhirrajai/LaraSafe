@@ -13,11 +13,15 @@ class UserManagementController extends Controller
 {
     public function index()
     {
-        $users = User::with('roles', 'permissions')
-                 ->whereDoesntHave('roles', function ($q) {
-                     $q->where('name', 'admin');
-                 })
-                 ->get();
+        $query = User::with('roles', 'permissions');
+
+        if (!auth()->user()->hasRole('admin')) {
+            $query->whereDoesntHave('roles', function ($q) {
+                $q->where('name', 'admin');
+            });
+        }
+
+        $users = $query->get();
         return Inertia::render('Users/Index', [
             'users' => $users,
         ]);

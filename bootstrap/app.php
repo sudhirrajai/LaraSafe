@@ -33,5 +33,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->redirectUsersTo('/dashboard');
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        //
+        $exceptions->render(function (\Spatie\Permission\Exceptions\UnauthorizedException $e, $request) {
+            if ($request->expectsJson() || $request->header('X-Inertia')) {
+                return back()->with('error', 'You do not have permission to perform this action.');
+            }
+        });
     })->create();

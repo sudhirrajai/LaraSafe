@@ -414,9 +414,7 @@ class DynamicStorageService
                 'local_path' => $localPath
             ]);
 
-            $contents = Storage::disk($disk)->get($remotePath);
-            
-            if (!$contents) {
+            if (!Storage::disk($disk)->exists($remotePath)) {
                 throw new \Exception("File not found on remote storage: {$remotePath}");
             }
 
@@ -426,7 +424,24 @@ class DynamicStorageService
                 mkdir($dir, 0755, true);
             }
 
-            file_put_contents($localPath, $contents);
+            // Stream file download to prevent memory exhaustion on large backups
+            $remoteStream = Storage::disk($disk)->readStream($remotePath);
+            if (!$remoteStream) {
+                throw new \Exception("Failed to open read stream from {$diskType} for: {$remotePath}");
+            }
+
+            $localFileHandle = fopen($localPath, 'w');
+            if (!$localFileHandle) {
+                if (is_resource($remoteStream)) {
+                    fclose($remoteStream);
+                }
+                throw new \Exception("Failed to open local file for writing: {$localPath}");
+            }
+
+            stream_copy_to_stream($remoteStream, $localFileHandle);
+
+            fclose($remoteStream);
+            fclose($localFileHandle);
             
             \Log::info("File downloaded successfully from {$diskType}", [
                 'size' => filesize($localPath)

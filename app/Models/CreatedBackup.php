@@ -45,22 +45,72 @@ class CreatedBackup extends Model
     }
 
     /**
-     * Verify backup file integrity using checksum
+     * Ensure storage disk is configured dynamically if needed
+     */
+    protected function ensureDiskConfigured(): ?string
+    {
+        $disk = $this->storage_disk ?? 'local';
+        if ($disk === 'local') {
+            return 'local';
+        }
+
+        try {
+            return app(\App\Services\DynamicStorageService::class)->configureDisk($disk);
+        } catch (\Exception $e) {
+            \Log::error("Failed to configure disk {$disk}: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Calculate SHA256 checksum for the stored backup file using streaming
+     */
+    public function calculateChecksum(): ?string
+    {
+        if (empty($this->file_path)) {
+            return null;
+        }
+
+        $disk = $this->ensureDiskConfigured();
+        if (!$disk) {
+            return null;
+        }
+
+        try {
+            if (!Storage::disk($disk)->exists($this->file_path)) {
+                return null;
+            }
+
+            $stream = Storage::disk($disk)->readStream($this->file_path);
+            if (!$stream) {
+                return null;
+            }
+
+            $ctx = hash_init('sha256');
+            hash_update_stream($ctx, $stream);
+            fclose($stream);
+            return hash_final($ctx);
+        } catch (\Exception $e) {
+            \Log::error("Checksum calculation error for backup {$this->id}: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Verify backup file integrity using checksum (works for both local and cloud storage via streams)
      */
     public function verifyIntegrity(): bool
     {
-        if (!$this->checksum) {
-            return false; // Can't verify without checksum
+        if (!$this->checksum || empty($this->file_path)) {
+            return false;
         }
 
-        if (!Storage::disk($this->storage_disk)->exists($this->file_path)) {
-            return false; // File doesn't exist
+        $currentChecksum = $this->calculateChecksum();
+        if (!$currentChecksum) {
+            return false;
         }
 
-        $filePath = Storage::disk($this->storage_disk)->path($this->file_path);
-        $currentChecksum = hash_file('sha256', $filePath);
-        
-        return $currentChecksum === $this->checksum;
+        return hash_equals($this->checksum, $currentChecksum);
     }
 
     /**
@@ -68,7 +118,20 @@ class CreatedBackup extends Model
      */
     public function fileExists(): bool
     {
-        return Storage::disk($this->storage_disk)->exists($this->file_path);
+        if (empty($this->file_path)) {
+            return false;
+        }
+
+        $disk = $this->ensureDiskConfigured();
+        if (!$disk) {
+            return false;
+        }
+
+        try {
+            return Storage::disk($disk)->exists($this->file_path);
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 
     /**
@@ -94,10 +157,24 @@ class CreatedBackup extends Model
      */
     public function deleteFile(): bool
     {
-        if ($this->fileExists()) {
-            return Storage::disk($this->storage_disk)->delete($this->file_path);
+        if (empty($this->file_path)) {
+            return true;
         }
-        return true;
+
+        $disk = $this->ensureDiskConfigured();
+        if (!$disk) {
+            return false;
+        }
+
+        try {
+            if (Storage::disk($disk)->exists($this->file_path)) {
+                return Storage::disk($disk)->delete($this->file_path);
+            }
+            return true;
+        } catch (\Exception $e) {
+            \Log::error("Failed to delete backup file {$this->file_path} from disk {$disk}: " . $e->getMessage());
+            return false;
+        }
     }
 
     private function formatBytes($size, $precision = 2): string

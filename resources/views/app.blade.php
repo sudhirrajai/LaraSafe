@@ -6,7 +6,7 @@
     <link rel="shortcut icon" type="image/png" href="/assets/images/logos/larasafe-favicon.png" />
     <link rel="stylesheet" href="/assets/css/styles.min.css" />
     @routes
-    @vite('resources/js/app.js')
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     @inertiaHead
 </head>

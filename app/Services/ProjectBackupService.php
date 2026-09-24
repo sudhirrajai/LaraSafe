@@ -3,16 +3,14 @@
 namespace App\Services;
 
 use App\Models\Backup;
-use Spatie\Backup\Tasks\Backup\BackupJobFactory;
-use Spatie\Backup\BackupDestination\BackupDestinationFactory;
 use ZipArchive;
-use Storage;
+use Illuminate\Support\Facades\Storage;
 
 class ProjectBackupService
 {
     public function runBackup($project)
     {
-        $disk = 'backups'; // your disk in filesystems.php
+        $disk = 'local';
 
         // build filename
         $fileName = $project->name . '_' . now()->format('Y-m-d_H-i-s') . '.zip';

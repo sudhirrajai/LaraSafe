@@ -14,7 +14,7 @@ class CleanupOldBackups extends Command
 
     public function handle()
     {
-        if (!$this->option('force')) {
+        if (!$this->option('force') && $this->input->isInteractive()) {
             if (!$this->confirm('This will delete old backups based on auto-delete settings. Continue?')) {
                 $this->info('Cleanup cancelled.');
                 return 0;

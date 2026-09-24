@@ -355,6 +355,9 @@ class BackupController extends Controller
                 }
             }
 
+            // Clear circular foreign key reference before deletion to prevent constraint violation
+            $backup->update(['last_created_backup_id' => null]);
+
             // Delete the backup record (this will cascade delete created_backups)
             $backup->delete();
 
@@ -659,11 +662,8 @@ class BackupController extends Controller
         $expiredBackups = CreatedBackup::where('expires_at', '<', now())->get();
 
         foreach ($expiredBackups as $backup) {
-            // Delete physical file
-            $disk = $backup->storage_disk ?? 'local';
-            if (Storage::disk($disk)->exists($backup->file_path)) {
-                Storage::disk($disk)->delete($backup->file_path);
-            }
+            // Delete physical file (handles local and cloud disks)
+            $backup->deleteFile();
 
             // Delete database record
             $backup->delete();

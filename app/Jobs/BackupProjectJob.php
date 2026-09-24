@@ -317,13 +317,18 @@ class BackupProjectJob implements ShouldQueue
                     continue;
                 }
                 
-                $filePath = $file->getRealPath();
-                $relativePath = substr($filePath, strlen($sourceDir) + 1);
+                // Normalize slashes for comparison
+                $normalizedRelative = str_replace('\\', '/', $relativePath);
                 
-                // Skip certain directories/files
-                if (strpos($relativePath, 'node_modules') !== false ||
-                    strpos($relativePath, '.git') !== false ||
-                    strpos($relativePath, 'vendor') !== false) {
+                // Skip certain directories/files to prevent bloat and recursive loops
+                if (
+                    str_contains($normalizedRelative, 'node_modules') ||
+                    str_contains($normalizedRelative, '.git') ||
+                    str_contains($normalizedRelative, 'vendor') ||
+                    str_starts_with($normalizedRelative, 'storage/app') ||
+                    str_starts_with($normalizedRelative, 'storage/framework') ||
+                    str_starts_with($normalizedRelative, 'storage/logs')
+                ) {
                     $skippedCount++;
                     continue;
                 }

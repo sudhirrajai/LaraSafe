@@ -12,13 +12,15 @@ class BackupStatusMail extends Mailable
     use Queueable, SerializesModels;
 
     public $backup;
+    public $createdBackup;
 
     /**
      * Create a new message instance.
      */
-    public function __construct(Backup $backup)
+    public function __construct(Backup $backup, $createdBackup = null)
     {
         $this->backup = $backup;
+        $this->createdBackup = $createdBackup;
     }
 
     /**
@@ -26,7 +28,8 @@ class BackupStatusMail extends Mailable
      */
     public function build()
     {
-        $subject = "Backup Update for Project: {$this->backup->project->name}";
+        $projectName = $this->backup->project->name ?? 'Project';
+        $subject = "Backup Update for Project: {$projectName}";
 
         return $this->subject($subject)
                     ->view('emails.backup_status');

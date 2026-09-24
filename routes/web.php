@@ -39,24 +39,24 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/store-project', [ProjectsController::class, 'storeProject'])->name('store-project')->middleware('permission:create project');
         Route::get('/edit-project/{id}', [ProjectsController::class, 'editProject'])->name('edit-project')->middleware('permission:edit project');
         Route::delete('/delete-project/{id}', [ProjectsController::class, 'destroyProject'])->name('delete-project')->middleware('permission:delete project');
-        Route::get('/view-project/{id}', [ProjectsController::class, 'viewProject'])->name('view-project');
+        Route::get('/view-project/{id}', [ProjectsController::class, 'viewProject'])->name('view-project')->middleware('permission:view project');
         Route::put('/update-project/{id}', [ProjectsController::class, 'updateProject'])->name('update-project')->middleware('permission:edit project');
     });
 
     Route::prefix('/backups')->group(function () {
         Route::get('/manage-backups', [BackupController::class, 'index'])->name('manage-backups');
         Route::get('/create-backup', [BackupController::class, 'createBackup'])->name('create-backup')->middleware('permission:create backup');
-        Route::get('/view-backup/{id}', [BackupController::class, 'viewBackups'])->name('view-backup');
+        Route::get('/view-backup/{id}', [BackupController::class, 'viewBackups'])->name('view-backup')->middleware('permission:view backup');
         Route::post('/store-backup', [BackupController::class, 'storeBackup'])->name('store-backup')->middleware('permission:create backup');
-        Route::post('/retry-backup/{id}', [BackupController::class, 'retryBackup'])->name('retry-backup');
+        Route::post('/retry-backup/{id}', [BackupController::class, 'retryBackup'])->name('retry-backup')->middleware('permission:create backup');
         Route::delete('/delete-backup/{id}', [BackupController::class, 'destroy'])->name('backups.destroy')->middleware('permission:delete backup');
         Route::get('/download/{id}', [BackupController::class, 'download'])->name('download.backup')->middleware('permission:download backup');
         Route::get('/edit-backup/{id}', [BackupController::class, 'edit'])->name('backups.edit')->middleware('permission:edit backup');
         Route::put('/update-backup/{id}', [BackupController::class, 'updateBackup'])->name('backups.update')->middleware('permission:edit backup');
         Route::delete('/delete-created-backup/{id}', [BackupController::class, 'destroySubBackup'])->name('backups.destroyCreatedBackup')->middleware('permission:delete backup');
-        Route::post('/test-db-connection', [BackupController::class, 'testDatabaseConnection'])->name('test-db-connection');
+        Route::post('/test-db-connection', [BackupController::class, 'testDatabaseConnection'])->name('test-db-connection')->middleware('permission:create backup');
         Route::post('/restore', [BackupController::class, 'restoreBackup'])->name('restore-backup')->middleware('permission:restore backup');
-        Route::post('/test-cloud-connection', [BackupController::class, 'testCloudConnection'])->name('backups.test-cloud');
+        Route::post('/test-cloud-connection', [BackupController::class, 'testCloudConnection'])->name('backups.test-cloud')->middleware('permission:create backup');
     });
 
     Route::prefix('/settings')->group(function () {

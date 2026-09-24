@@ -159,23 +159,30 @@ class DashboardController extends Controller
 
     private function getBackupTrends()
     {
+        $startDate = Carbon::now()->subDays(29)->startOfDay();
+        
+        $trendData = Backup::whereIn('status', ['success', 'failed'])
+            ->where('updated_at', '>=', $startDate)
+            ->selectRaw('DATE(updated_at) as date, status, COUNT(*) as count')
+            ->groupBy('date', 'status')
+            ->get();
+
+        $keyedData = [];
+        foreach ($trendData as $row) {
+            $keyedData[$row->date][$row->status] = (int) $row->count;
+        }
+
         $days = [];
         $successful = [];
         $failed = [];
         
         for ($i = 29; $i >= 0; $i--) {
             $date = Carbon::now()->subDays($i);
+            $dateKey = $date->format('Y-m-d');
             $days[] = $date->format('M j');
             
-            $daySuccessful = Backup::where('status', 'success')
-                ->whereDate('updated_at', $date)
-                ->count();
-            $dayFailed = Backup::where('status', 'failed')
-                ->whereDate('updated_at', $date)
-                ->count();
-                
-            $successful[] = $daySuccessful;
-            $failed[] = $dayFailed;
+            $successful[] = $keyedData[$dateKey]['success'] ?? 0;
+            $failed[] = $keyedData[$dateKey]['failed'] ?? 0;
         }
         
         return [
@@ -188,26 +195,28 @@ class DashboardController extends Controller
     private function getServerStorage()
     {
         // Get the storage path where backups are stored
-        // You can customize this to your backup storage location
-        $backupPath = storage_path('app/backups');
+        $backupPath = storage_path('app/private/backups');
         
         // Create directory if it doesn't exist
         if (!file_exists($backupPath)) {
-            mkdir($backupPath, 0755, true);
+            @mkdir($backupPath, 0755, true);
         }
         
         // Get disk information
-        $totalSpace = disk_total_space($backupPath);
-        $freeSpace = disk_free_space($backupPath);
-        $usedSpace = $totalSpace - $freeSpace;
+        $totalSpace = @disk_total_space($backupPath) ?: 0;
+        $freeSpace = @disk_free_space($backupPath) ?: 0;
+        $usedSpace = max(0, $totalSpace - $freeSpace);
         
-        // Get space used by Larasafe backups
-        $larasafeUsed = CreatedBackup::sum('size') ?? 0;
+        // Get space used by LaraSafe local backups (for local drive calculation)
+        $larasafeLocalUsed = CreatedBackup::where('storage_disk', 'local')->sum('size') ?? 0;
+        // Total backups across all storage (local + cloud)
+        $larasafeTotalUsed = CreatedBackup::sum('size') ?? 0;
         
         // Calculate percentages
         $usedPercentage = $totalSpace > 0 ? round(($usedSpace / $totalSpace) * 100, 1) : 0;
-        $larasafePercentage = $totalSpace > 0 ? round(($larasafeUsed / $totalSpace) * 100, 1) : 0;
-        $availablePercentage = 100 - $usedPercentage;
+        // Cap at 100% and compare local storage against local disk
+        $larasafePercentage = $totalSpace > 0 ? min(100, round(($larasafeLocalUsed / $totalSpace) * 100, 1)) : 0;
+        $availablePercentage = max(0, 100 - $usedPercentage);
         
         // Get RAM information
         $ramInfo = $this->getRAMInfo();
@@ -216,7 +225,8 @@ class DashboardController extends Controller
             'total' => $totalSpace,
             'used' => $usedSpace,
             'free' => $freeSpace,
-            'larasafe_used' => $larasafeUsed,
+            'larasafe_used' => $larasafeTotalUsed,
+            'larasafe_local_used' => $larasafeLocalUsed,
             'used_percentage' => $usedPercentage,
             'available_percentage' => $availablePercentage,
             'larasafe_percentage' => $larasafePercentage,
@@ -232,75 +242,76 @@ class DashboardController extends Controller
             'free' => 0,
             'used_percentage' => 0,
             'free_percentage' => 0,
-            'larasafe_used' => 0,
+            'larasafe_used' => memory_get_usage(true),
             'larasafe_percentage' => 0,
         ];
         
         // Check if we're on a Linux system
         if (PHP_OS_FAMILY === 'Linux' && file_exists('/proc/meminfo')) {
-            $meminfo = file_get_contents('/proc/meminfo');
+            $meminfo = @file_get_contents('/proc/meminfo');
             
-            // Parse meminfo
-            preg_match('/MemTotal:\s+(\d+)\s+kB/', $meminfo, $totalMatch);
-            preg_match('/MemAvailable:\s+(\d+)\s+kB/', $meminfo, $availableMatch);
-            
-            if (!empty($totalMatch[1])) {
-                $totalKB = (int)$totalMatch[1];
-                $availableKB = !empty($availableMatch[1]) ? (int)$availableMatch[1] : 0;
-                
-                // Convert KB to bytes
-                $ramInfo['total'] = $totalKB * 1024;
-                $ramInfo['free'] = $availableKB * 1024;
-                $ramInfo['used'] = $ramInfo['total'] - $ramInfo['free'];
-                
-                // Get current PHP process memory usage (Larasafe)
-                $ramInfo['larasafe_used'] = memory_get_usage(true);
-                
-                // Calculate percentages
-                if ($ramInfo['total'] > 0) {
-                    $ramInfo['used_percentage'] = round(($ramInfo['used'] / $ramInfo['total']) * 100, 1);
-                    $ramInfo['free_percentage'] = round(($ramInfo['free'] / $ramInfo['total']) * 100, 1);
-                    $ramInfo['larasafe_percentage'] = round(($ramInfo['larasafe_used'] / $ramInfo['total']) * 100, 2);
-                }
-            }
-        } 
-        // Check if we're on Windows
-        elseif (PHP_OS_FAMILY === 'Windows') {
-            // Use wmic command to get memory info
-            $output = shell_exec('wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /Value');
-            
-            if ($output) {
-                preg_match('/FreePhysicalMemory=(\d+)/', $output, $freeMatch);
-                preg_match('/TotalVisibleMemorySize=(\d+)/', $output, $totalMatch);
+            if ($meminfo) {
+                preg_match('/MemTotal:\s+(\d+)\s+kB/', $meminfo, $totalMatch);
+                preg_match('/MemAvailable:\s+(\d+)\s+kB/', $meminfo, $availableMatch);
                 
                 if (!empty($totalMatch[1])) {
                     $totalKB = (int)$totalMatch[1];
-                    $freeKB = !empty($freeMatch[1]) ? (int)$freeMatch[1] : 0;
+                    $availableKB = !empty($availableMatch[1]) ? (int)$availableMatch[1] : 0;
                     
-                    // Convert KB to bytes
                     $ramInfo['total'] = $totalKB * 1024;
-                    $ramInfo['free'] = $freeKB * 1024;
-                    $ramInfo['used'] = $ramInfo['total'] - $ramInfo['free'];
+                    $ramInfo['free'] = $availableKB * 1024;
+                    $ramInfo['used'] = max(0, $ramInfo['total'] - $ramInfo['free']);
                     
-                    // Get current PHP process memory usage (Larasafe)
-                    $ramInfo['larasafe_used'] = memory_get_usage(true);
-                    
-                    // Calculate percentages
                     if ($ramInfo['total'] > 0) {
                         $ramInfo['used_percentage'] = round(($ramInfo['used'] / $ramInfo['total']) * 100, 1);
                         $ramInfo['free_percentage'] = round(($ramInfo['free'] / $ramInfo['total']) * 100, 1);
                         $ramInfo['larasafe_percentage'] = round(($ramInfo['larasafe_used'] / $ramInfo['total']) * 100, 2);
                     }
+                    return $ramInfo;
+                }
+            }
+        } 
+        // Check if we're on Windows
+        elseif (PHP_OS_FAMILY === 'Windows') {
+            $output = @shell_exec('wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /Value 2>nul');
+            
+            // Fallback for Windows 11 (24H2+) where wmic is removed
+            if (!$output || !str_contains($output, 'TotalVisibleMemorySize')) {
+                $output = @shell_exec('powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select-Object -Property FreePhysicalMemory,TotalVisibleMemorySize | Format-List" 2>nul');
+            }
+            
+            if ($output) {
+                preg_match('/FreePhysicalMemory\s*[:=]\s*(\d+)/i', $output, $freeMatch);
+                preg_match('/TotalVisibleMemorySize\s*[:=]\s*(\d+)/i', $output, $totalMatch);
+                
+                if (!empty($totalMatch[1])) {
+                    $totalKB = (int)$totalMatch[1];
+                    $freeKB = !empty($freeMatch[1]) ? (int)$freeMatch[1] : 0;
+                    
+                    $ramInfo['total'] = $totalKB * 1024;
+                    $ramInfo['free'] = $freeKB * 1024;
+                    $ramInfo['used'] = max(0, $ramInfo['total'] - $ramInfo['free']);
+                    
+                    if ($ramInfo['total'] > 0) {
+                        $ramInfo['used_percentage'] = round(($ramInfo['used'] / $ramInfo['total']) * 100, 1);
+                        $ramInfo['free_percentage'] = round(($ramInfo['free'] / $ramInfo['total']) * 100, 1);
+                        $ramInfo['larasafe_percentage'] = round(($ramInfo['larasafe_used'] / $ramInfo['total']) * 100, 2);
+                    }
+                    return $ramInfo;
                 }
             }
         }
-        // Fallback: Use PHP memory limit as approximation
-        else {
-            $memoryLimit = ini_get('memory_limit');
-            if ($memoryLimit != '-1') {
-                $ramInfo['larasafe_used'] = memory_get_usage(true);
-                // Note: This is just PHP memory limit, not actual system RAM
-                $ramInfo['total'] = $this->convertToBytes($memoryLimit);
+        
+        // Fallback: Use PHP memory limit
+        $memoryLimit = ini_get('memory_limit');
+        if ($memoryLimit && $memoryLimit != '-1') {
+            $ramInfo['total'] = $this->convertToBytes($memoryLimit);
+            $ramInfo['used'] = $ramInfo['larasafe_used'];
+            $ramInfo['free'] = max(0, $ramInfo['total'] - $ramInfo['used']);
+            if ($ramInfo['total'] > 0) {
+                $ramInfo['used_percentage'] = round(($ramInfo['used'] / $ramInfo['total']) * 100, 1);
+                $ramInfo['free_percentage'] = round(($ramInfo['free'] / $ramInfo['total']) * 100, 1);
+                $ramInfo['larasafe_percentage'] = $ramInfo['used_percentage'];
             }
         }
         

@@ -25,6 +25,7 @@ class Backup extends Model
         'backup_frequency',
         'backup_time',
         'last_backup_at',
+        'last_restored_at',
         'next_backup_at',
         'include_database',
         'database_config',
@@ -36,6 +37,7 @@ class Backup extends Model
 
     protected $casts = [
         'last_backup_at' => 'datetime',
+        'last_restored_at' => 'datetime',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'next_backup_at' => 'datetime',

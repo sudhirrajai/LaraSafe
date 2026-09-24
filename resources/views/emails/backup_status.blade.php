@@ -97,9 +97,9 @@
         </div>
         <div class="content">
             <div class="card">
-                <div class="card-title">Backup Details for Project: {{ $backup->project->name }}</div>
+                <div class="card-title">Backup Details for Project: {{ $backup->project->name ?? 'Unknown Project' }}</div>
                 <p>Hello,</p>
-                <p>The backup process for your project <strong>{{ $backup->project->name }}</strong> has been completed with the following details:</p>
+                <p>The backup process for your project <strong>{{ $backup->project->name ?? 'Unknown Project' }}</strong> has been completed with the following details:</p>
                 <table class="table">
                     <tr>
                         <th>Filename</th>
@@ -111,7 +111,7 @@
                     </tr>
                     <tr>
                         <th>Size</th>
-                        <td>{{ number_format($backup->size / 1024 / 1024, 2) }} MB</td>
+                        <td>{{ $backup->size ? number_format($backup->size / 1024 / 1024, 2) . ' MB' : 'N/A' }}</td>
                     </tr>
                     <tr>
                         <th>Created At</th>

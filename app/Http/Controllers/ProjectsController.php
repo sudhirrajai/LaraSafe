@@ -37,9 +37,18 @@ class ProjectsController extends Controller
     public function storeProject(Request $request)
     {
         $validation = $request->validate([
-            'name' => 'required',
-            'description' => 'nullable|string',
-            'path' => 'required|string',
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string|max:1000',
+            'path' => [
+                'required',
+                'string',
+                'max:500',
+                function ($attribute, $value, $fail) {
+                    if (!is_dir($value)) {
+                        $fail("The specified project directory does not exist or is not accessible on the server.");
+                    }
+                },
+            ],
         ]);
 
         $project = Project::create($validation);
@@ -61,9 +70,18 @@ class ProjectsController extends Controller
         $project = Project::findOrFail($id);
 
         $validation = $request->validate([
-            'name' => 'required',
-            'description' => 'nullable|string',
-            'path' => 'required|string',
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string|max:1000',
+            'path' => [
+                'required',
+                'string',
+                'max:500',
+                function ($attribute, $value, $fail) {
+                    if (!is_dir($value)) {
+                        $fail("The specified project directory does not exist or is not accessible on the server.");
+                    }
+                },
+            ],
         ]);
 
         $project->update($validation);
@@ -151,6 +169,9 @@ class ProjectsController extends Controller
 
             // Clean up project backup folders
             $this->cleanupProjectBackupFolder($project, $deletedFolders);
+
+            // Clear circular foreign key references before deletion
+            $project->backups()->update(['last_created_backup_id' => null]);
 
             // Delete the project (cascade deletes backups and created_backups)
             $project->delete();

@@ -133,10 +133,12 @@ class RestoreBackupJob implements ShouldQueue
                     'storage' => $storageDisk
                 ]);
 
-                // Update backup status
-                $this->createdBackup->backup->update([
-                    'last_restored_at' => now()
-                ]);
+                // Update backup status if column exists
+                if (\Illuminate\Support\Facades\Schema::hasColumn('backups', 'last_restored_at')) {
+                    $this->createdBackup->backup->update([
+                        'last_restored_at' => now()
+                    ]);
+                }
 
             } else {
                 throw new Exception("Failed to open backup zip file: {$filePath}");
@@ -180,8 +182,8 @@ class RestoreBackupJob implements ShouldQueue
             return $projectPathFromDb;
         }
 
-        // Absolute path
-        if (str_starts_with($projectPathFromDb, '/')) {
+        // Absolute path (Unix or Windows drive letter)
+        if (str_starts_with($projectPathFromDb, '/') || preg_match('/^[a-zA-Z]:[\\\\\/]/', $projectPathFromDb)) {
             return $projectPathFromDb;
         }
 
@@ -207,20 +209,21 @@ class RestoreBackupJob implements ShouldQueue
             foreach ($sqlFiles as $sqlFilePath) {
                 Log::info("Restoring database from dump", ['file' => basename($sqlFilePath)]);
 
-                // Get database credentials from backup config
-                $dbCredentials = $this->getDatabaseCredentials();
+                // Get database credentials from backup config or extracted project .env
+                $dbCredentials = $this->getDatabaseCredentials($projectPath);
                 
                 if ($dbCredentials) {
                     $this->importDatabaseDump($sqlFilePath, $dbCredentials);
                 } else {
-                    // Fallback to default connection
-                    $sql = file_get_contents($sqlFilePath);
-                    DB::unprepared($sql);
-                    Log::info("Database restored using default connection");
+                    Log::error("Database dump found but target database credentials could not be resolved. Skipping DB restore to avoid corrupting host database.", [
+                        'file' => basename($sqlFilePath),
+                        'backup_id' => $this->createdBackup->id,
+                        'project_path' => $projectPath
+                    ]);
                 }
 
-                // Remove the SQL file after successful import
-                unlink($sqlFilePath);
+                // Remove the SQL file after import or attempted restore
+                @unlink($sqlFilePath);
             }
 
         } catch (Exception $e) {
@@ -233,34 +236,88 @@ class RestoreBackupJob implements ShouldQueue
     }
 
     /**
-     * Get database credentials from backup config
+     * Get database credentials from backup config or project .env
      */
-    private function getDatabaseCredentials(): ?array
+    private function getDatabaseCredentials(string $projectPath): ?array
     {
         $dbConfig = $this->createdBackup->backup->database_config;
         
-        if (!$dbConfig || !isset($dbConfig['credentials'])) {
-            return null;
+        // 1. Check custom credentials in backup config
+        if ($dbConfig && isset($dbConfig['credentials'])) {
+            try {
+                if (is_string($dbConfig['credentials'])) {
+                    $decrypted = decrypt($dbConfig['credentials']);
+                    $decoded = json_decode($decrypted, true);
+                    if ($decoded && !empty($decoded['database'])) {
+                        return $decoded;
+                    }
+                } elseif (is_array($dbConfig['credentials']) && !empty($dbConfig['credentials']['database'])) {
+                    return $dbConfig['credentials'];
+                }
+            } catch (Exception $e) {
+                Log::warning("Failed to decrypt database credentials from config", [
+                    'error' => $e->getMessage()
+                ]);
+            }
         }
 
-        try {
-            // If it's encrypted string, decrypt it
-            if (is_string($dbConfig['credentials'])) {
-                $decrypted = decrypt($dbConfig['credentials']);
-                return json_decode($decrypted, true);
+        // 2. Fall back to extracted project's .env file
+        $envPath = rtrim($projectPath, '/\\') . DIRECTORY_SEPARATOR . '.env';
+        if (file_exists($envPath)) {
+            $credentials = $this->parseEnvDatabaseCredentials($envPath);
+            if ($credentials && !empty($credentials['database'])) {
+                Log::info("Using target database credentials from restored .env", [
+                    'database' => $credentials['database'],
+                    'host' => $credentials['host']
+                ]);
+                return $credentials;
             }
-            
-            // If already an array
-            if (is_array($dbConfig['credentials'])) {
-                return $dbConfig['credentials'];
-            }
-        } catch (Exception $e) {
-            Log::warning("Failed to decrypt database credentials", [
-                'error' => $e->getMessage()
-            ]);
         }
 
         return null;
+    }
+
+    /**
+     * Parse database credentials from a project .env file
+     */
+    private function parseEnvDatabaseCredentials(string $envPath): ?array
+    {
+        try {
+            $lines = file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            if (!$lines) return null;
+
+            $credentials = [
+                'host' => '127.0.0.1',
+                'port' => 3306,
+                'database' => '',
+                'username' => '',
+                'password' => ''
+            ];
+
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (empty($line) || str_starts_with($line, '#')) continue;
+
+                if (str_contains($line, '=')) {
+                    [$key, $value] = explode('=', $line, 2);
+                    $key = trim($key);
+                    $value = trim($value, " \t\n\r\0\x0B\"'");
+
+                    match ($key) {
+                        'DB_HOST' => $credentials['host'] = $value,
+                        'DB_PORT' => $credentials['port'] = (int) $value,
+                        'DB_DATABASE' => $credentials['database'] = $value,
+                        'DB_USERNAME' => $credentials['username'] = $value,
+                        'DB_PASSWORD' => $credentials['password'] = $value,
+                        default => null
+                    };
+                }
+            }
+
+            return !empty($credentials['database']) ? $credentials : null;
+        } catch (Exception $e) {
+            Log::error("Failed to parse target .env credentials: " . $e->getMessage());
+            return null;
     }
 
     /**

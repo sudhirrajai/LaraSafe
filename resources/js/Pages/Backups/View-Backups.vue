@@ -38,7 +38,7 @@ const handleDelete = (backupId) => {
     }).then((result) => {
         if (result.isConfirmed) {
             deleting.value = backupId
-            router.delete(`/backups/delete-backup/${backupId}`, {
+            router.delete(`/backups/delete-created-backup/${backupId}`, {
                 onSuccess: () => {
                     Swal.fire('Deleted!', 'Backup has been deleted.', 'success')
                     deleting.value = null
