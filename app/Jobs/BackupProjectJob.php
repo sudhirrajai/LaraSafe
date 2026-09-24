@@ -380,6 +380,16 @@ mysql -h 127.0.0.1 -u root -p -e "CREATE DATABASE IF NOT EXISTS \`{$targetDb}\` 
 mysql -h 127.0.0.1 -u root -p {$targetDb} < database.sql
 ```
 
+### Step 3: Verify File Permissions & Ownership
+Extraction and overwriting files preserves existing directory permissions by default, but new or extracted files may inherit the current extraction user's ownership. 
+
+To ensure your web server or application process (e.g. Nginx, Apache, PM2, Node) can read and write properly:
+```bash
+# Example for Linux/macOS web servers (e.g. www-data or nginx):
+# sudo chown -R www-data:www-data "{$originalPath}"
+# sudo chmod -R 755 "{$originalPath}"
+```
+
 ---
 
 ## 🔒 Security & Integrity Notice
@@ -406,6 +416,9 @@ echo ""
 if [ ! -f "database.sql" ]; then
     echo "[*] No database.sql found in this archive."
     echo "[✓] Project files are extracted and ready."
+    echo ""
+    echo "[!] Reminder: Please verify that directory and file permissions match"
+    echo "    your web server or application user (e.g., www-data, nginx, or node)."
     exit 0
 fi
 
@@ -456,6 +469,9 @@ MYSQL_PWD="\$DB_PASS" mysql -h"\$DB_HOST" -P"\$DB_PORT" -u"\$DB_USER" "\$DB_NAME
 
 echo "✓ Database successfully restored!"
 echo "✓ Project files and database are ready."
+echo ""
+echo "[!] Reminder: Please verify that directory and file permissions match"
+echo "    your web server or application user (e.g., www-data, nginx, or node)."
 BASH;
 
         $shPath = $stagingDir . DIRECTORY_SEPARATOR . 'restore.sh';
@@ -474,6 +490,8 @@ echo.
 if not exist "database.sql" (
     echo [*] No database.sql found in this archive.
     echo [OK] Project files are extracted and ready.
+    echo.
+    echo [!] Reminder: Please verify file permissions for your service or application user.
     pause
     exit /b 0
 )
@@ -501,6 +519,8 @@ set MYSQL_PWD=
 echo.
 echo [OK] Database successfully restored!
 echo [OK] Project files and database are ready.
+echo.
+echo [!] Reminder: Please verify file permissions for your service or application user.
 echo.
 pause
 BAT;

@@ -123,9 +123,10 @@ class RestoreBackupJob implements ShouldQueue
             // Check for and restore database dump
             $this->restoreDatabase($projectPath);
 
-            Log::info("Backup restored successfully", [
+            Log::info("Backup restored successfully. Please verify project file permissions and ownership for your web server user (e.g., www-data, nginx).", [
                 'backup_id' => $this->createdBackup->id,
                 'project_id' => $this->createdBackup->backup->project->id,
+                'project_path' => $projectPath,
                 'storage' => $storageDisk
             ]);
 
