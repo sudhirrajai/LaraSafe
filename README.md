@@ -1,4 +1,4 @@
-<h1 align="center"># Laravel Backup Manager 🚀</h1>
+<h1 align="center"># LaraSafe - Universal Backup & Disaster Recovery Manager 🚀</h1>
 
 <p align="center">
     <img src="https://raw.githubusercontent.com/RajaiSudhir/LaraSafe/main/public/assets/images/logos/logo.png" width="300" alt="LaraSafe Logo">
@@ -10,218 +10,181 @@
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/packagist/l/RajaiSudhir/LaraSafe" alt="License"></a>
 </p>
 
-A powerful and flexible backup management solution built with Laravel, Inertia, and Vue. Effortlessly manage, schedule, and monitor backups for your projects with a sleek, modern interface.
+A powerful, secure, and universal backup management and disaster recovery platform built with **Laravel**, **Inertia.js**, and **Vue.js**. Effortlessly backup, schedule, verify, and restore any web application or database with high-ratio `.tar.gz` compression, streaming integrity checksums, and standalone 1-click disaster recovery.
+
+---
+
+## 🔥 Key Highlights
+
+- 📦 **Universal Stack Support**: Protect any project directory—**Next.js, React, Node.js, Python, Laravel, WordPress, Vue, or static sites**. The full project directory is preserved intact.
+- 🗜️ **High-Ratio `.tar.gz` Compression**: Advanced gzip compression using native system `tar` (with PHP `PharData`/`ZipArchive` fallbacks) to maximize storage savings across local and remote disks.
+- 🛡️ **Self-Contained Disaster Recovery Bundle**: Each archive bundles project files, a clean `database.sql` dump, `RESTORE.md` documentation, and automated helper scripts (`restore.sh` / `restore.bat`). If your server is compromised or destroyed, download the backup directly from remote storage to a fresh server and restore immediately—no LaraSafe installation required.
+- 🔐 **Hardened Security & IDOR Defense**: Strict user ownership, granular permissions (`manage settings`, `create backup`, `download backup`, etc.), masked credentials, path traversal defense, and secure database dumping without exposing passwords in process listings (`ps`/`tasklist`).
+- 🔍 **Streaming SHA-256 Integrity Verification**: Calculates and audits checksums in real-time with zero memory bloat, complete with an automated integrity command (`php artisan backups:verify-integrity`).
+- ☁️ **Multi-Disk & Cloud Storage**: Seamlessly store and retrieve backups on Local Storage, Amazon S3, Google Drive, or Dropbox.
+- ⚡ **1-Click Web Restoration**: Extract files to their original path and automatically restore database dumps with automatic cleanup.
 
 ---
 
 ## ✨ Quick Start
 
-Follow these steps to set up and run the Laravel Backup Management System (LaraSafe):
+Follow these steps to set up and run LaraSafe:
 
-1. **Clone the Repository**
+### 1. Clone the Repository
 
-   ```
-   git clone https://github.com/RajaiSudhir/LaraSafe.git
-   cd LaraSafe
-   ```
+```bash
+git clone https://github.com/RajaiSudhir/LaraSafe.git
+cd LaraSafe
+```
 
-2. **Install Dependencies**
+### 2. Install Dependencies
 
-   ```
-   composer install
-   npm install && npm run build
-   ```
+```bash
+composer install
+npm install && npm run build
+```
 
-3. **Configure Environment**
+### 3. Configure Environment
 
-   ```
-   cp .env.example .env
-   php artisan key:generate
-   ```
+```bash
+cp .env.example .env
+php artisan key:generate
+```
 
-4. **Set Up Database and Queue**
+Edit `.env` to configure your database (`DB_*`), queue connection (`QUEUE_CONNECTION=database`), and mail settings.
 
-   - Edit `.env` to configure `DB_*` settings and set `QUEUE_CONNECTION=database`.
+### 4. Run Migrations and Seeders
 
-5. **Run Migrations and Seeders**
+```bash
+php artisan migrate --seed
+```
 
-   ```
-   php artisan migrate --seed
-   ```
+### 5. Server Permissions Setup (Linux / Production)
+
+Ensure your web server and queue worker user (e.g. `www-data` or your deployment user) has proper read/write ownership:
+
+```bash
+# Change ownership to web user
+sudo chown -R www-data:www-data /var/www/LaraSafe
+
+# Set directory and file permissions
+sudo chmod -R 775 /var/www/LaraSafe/storage /var/www/LaraSafe/bootstrap/cache
+```
+
+### 6. Start the Queue Worker & Scheduler
+
+LaraSafe processes backups and restores asynchronously in the background:
+
+```bash
+# Start the queue worker
+php artisan queue:work
+
+# In cron (crontab -e), add the Laravel scheduler:
+* * * * * cd /var/www/LaraSafe && php artisan schedule:run >> /dev/null 2>&1
+```
+
+### 7. Launch the Application
+
+```bash
+php artisan serve
+```
+
+Log in with your administrator account, create your projects, and schedule your automated backups!
 
 ---
 
-### ⚙️ Laravel Work & Server Permissions Setup
+## 🛡️ Standalone Disaster Recovery Architecture
 
-> Steps to manage **Laravel queue workers** and give proper **permissions and ownership** to allow editing and directory creation inside `/var/www`.
-
-#### 🔍 1. Find the Laravel Queue Worker
+LaraSafe is designed with a **zero-lock-in, disaster-first philosophy**. If your host server is hacked, ransomed, or destroyed:
 
 ```
-ps aux | grep 'queue:work'
+backup_archive.tar.gz
+├── database.sql           # Clean MySQL database dump (if DB backup enabled)
+├── RESTORE.md             # Complete step-by-step restoration guide
+├── restore.sh             # 1-click Linux/macOS restore helper
+├── restore.bat            # 1-click Windows restore helper
+└── [Your Project Files]   # Full project directory & code
 ```
 
-This command lists running queue workers.  
-In this case, the process runs under the user `predator`.
-
-#### 🧑‍💻 2. Change Ownership (Server)
-
-```
-# Change ownership recursively to user predator (if not already owned)
-sudo chown -R predator:predator /var/www
-```
-
-#### 🔐 3. Grant Proper Permissions
-
-```
-# Ensure read/write/execute permissions for user predator on all files/folders inside
-sudo chmod -R u+rwX /var/www
-```
-
-#### 💻 4. Local Development Path
-
-```
-/home/predator/Documents
-```
-
-✅ These steps ensure Laravel has proper permissions to edit files, create directories, and run queue workers smoothly both locally and on the server.
-
----
-
-6. **Serve the Application**
-
+### Remote Restore Steps (Fresh Server):
+1. **Download Archive**: Directly download your `.tar.gz` from your S3 bucket, Google Drive, Dropbox, or backup storage.
+2. **Extract to Target Path**:
+   ```bash
+   mkdir -p /var/www/my-app
+   tar -xzf backup_2026_09_24.tar.gz -C /var/www/my-app
+   cd /var/www/my-app
    ```
-   php artisan serve
+3. **Restore Database**:
+   - Run `bash restore.sh` (or `restore.bat` on Windows), enter your target database credentials, and your database is restored instantly.
+   - Or manually: `mysql -u root -p my_db < database.sql`
+4. **Verify Permissions**:
+   ```bash
+   sudo chown -R www-data:www-data /var/www/my-app
+   sudo chmod -R 755 /var/www/my-app
    ```
 
-7. **Get Started**
-
-   - Log in with the default seeded user.
-   - Create projects under **Manage Projects**.
-   - Configure backups for each project.
-   - Monitor stats, schedules, and downloads via the **Dashboard**.
+*Security Note: LaraSafe intentionally does not execute arbitrary scripts, post-install commands, or alter system permissions during extraction, preventing tampering or remote code execution risks.*
 
 ---
 
-## 🔥 Highlights
+## 🔒 Integrity Verification
 
-- **Fully Native**: Built using Laravel core, Inertia, and Vue.
-- **Private Storage**: Backups stored securely in `storage/app/private/backups/{project}`.
-- **Scheduling**: Supports daily, weekly, or monthly backups at custom times.
-- **Integrity Checks**: Uses SHA-256 checksums and auto-expiry cleanup.
-- **Interactive Dashboard**: Real-time stats, trends, timelines, and quick actions.
-- **Production-Ready**: Includes migrations and seeders for seamless setup.
+To detect storage bit rot, transmission errors, or tampering, every backup file is fingerprinted with a streaming SHA-256 checksum.
 
----
+### Run Integrity Audit:
+```bash
+# Verify integrity across all stored backups
+php artisan backups:verify-integrity
 
-## 📚 Core Features
+# Check backups for a specific project
+php artisan backups:verify-integrity --project="My Application"
 
-| **Category**    | **Details**                                                                      |
-| --------------- | -------------------------------------------------------------------------------- |
-| **Projects**    | Define multiple projects with custom file paths.                                 |
-| **Backups**     | Configure backup frequency, timing, and retry pending backups.                   |
-| **Storage**     | Secure, non-public disk with organized folder structure.                         |
-| **Metadata**    | Tracks file size, checksum, and expiry date for each backup.                     |
-| **Jobs/Queues** | Asynchronous ZIP creation via `BackupProjectJob`.                                |
-| **Dashboard**   | Inertia + Vue interface with stats cards, tables, timeline, charts, and loaders. |
-| **Analytics**   | Charts for storage usage, success/failure trends, and upcoming schedules.        |
-
----
-
-## 🎯 Dashboard Overview
-
-### Stats Cards
-
-- Total Projects
-- Total Backups & Today’s Count
-- Storage Used & This Week’s Count
-- Success Rate & Successful Backups Count
-
-### Upcoming Backups
-
-- Timeline of the next 7 days' scheduled backups with countdown timers.
-
-### Recent Backups
-
-- Displays the latest 10 backup operations with download links and status badges.
-
-### Project Statistics
-
-- Top 5 projects by backup count and total size, including last backup timestamp.
-
-### Storage Usage
-
-- Bar chart showing storage consumption per project.
-
-### Quick Actions
-
-- Create New Backup
-- Manage Backups
-- Manage Projects
-- Settings
-
----
-
-## 🔧 Configuration
-
-### Filesystem (`config/filesystems.php`)
-
-```
-'disks' => [
-    'private' => [
-        'driver' => 'local',
-        'root'   => storage_path('app/private'),
-    ],
-],
-```
-
-### Queue (`.env`)
-
-```
-QUEUE_CONNECTION=database
-```
-
-### Scheduler (`routes/console.php`)
-
-```
-Schedule::command('backups:dispatch-due')->everyMinute();
+# Check backups on a specific storage disk
+php artisan backups:verify-integrity --disk=s3
 ```
 
 ---
 
-## 🚀 Upcoming Features
+## 📚 Core Features & Dashboard
 
-- Two-factor authentication (2FA) with TOTP codes and recovery support to harden account security.
-- Role-based access control with team-aware permissions for multi-tenant and collaborative workflows.
-- ZIP integrity verification via per-archive checksums (e.g., SHA-256) to detect tampering or corruption.
-- Additional storage providers out of the box: Amazon S3, Backblaze B2, and DigitalOcean Spaces.
-- Real-time notifications for backup lifecycle events (queued, running, success, failed) via broadcasting.
+| Category | Description |
+| :--- | :--- |
+| **Project Management** | Manage multiple projects across any language/framework with custom paths and ownership. |
+| **Flexible Scheduling** | Daily, weekly, or monthly automated backups with retention auto-cleanup policies. |
+| **Database Dumps** | Secure `mysqldump` packaging with support for full database or selected tables. |
+| **Cloud Storage** | Dynamic disk configuration supporting Local, AWS S3, Google Drive, and Dropbox. |
+| **Interactive UI** | Inertia.js + Vue 3 interface with real-time stats cards, countdown timers, charts, and activity logs. |
+| **Email Alerts** | Instant email notifications for successful backups and detailed failure alerts. |
 
 ---
 
-## 🚧 Roadmap
+## 🧪 Testing
 
-- 🔐 Enhanced authentication and profile management.
-- 🤖 Notifications via Telegram, Slack, and Email.
-- 💾 Full backups combining files and SQL dumps in one archive.
-- ⚡ Incremental snapshots and image-based backups.
-- 🔄 Web UI for file and database restoration.
+LaraSafe includes automated feature and unit test suites:
 
-Contributions are welcome! See the **Contributing** section below.
+```bash
+php artisan test
+```
+
+Includes coverage for:
+- Streaming SHA-256 integrity calculation and command verification.
+- IDOR access control and download authorization.
+- `.tar.gz` disaster recovery packaging and in-app restoration.
+- Next.js, React, and multi-stack full directory backup workflows.
+- Settings permissions and security policies.
 
 ---
 
 ## 🤝 Contributing
 
-1. Fork and clone the repository.
-2. Create a feature branch.
-3. Commit and push your changes.
-4. Open a Pull Request.
-
-Please adhere to our [Code of Conduct](link-to-code-of-conduct).
+1. Fork the repository.
+2. Create your feature branch (`git checkout -b feature/amazing-feature`).
+3. Commit your changes (`git commit -m 'feat: add amazing feature'`).
+4. Push to the branch (`git push origin feature/amazing-feature`).
+5. Open a Pull Request.
 
 ---
 
 ## 📄 License
 
-Feel free to use, modify, and distribute!
+This project is open-sourced software licensed under the [MIT License](LICENSE).
