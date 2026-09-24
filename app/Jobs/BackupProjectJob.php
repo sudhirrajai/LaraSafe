@@ -323,100 +323,68 @@ class BackupProjectJob implements ShouldQueue
     private function generateDisasterRecoveryAssets(string $stagingDir, $project, string $archiveName, bool $hasDb, ?string $dbName): void
     {
         $projectName = $project->name ?? 'Application';
+        $originalPath = $project->path ?? '/var/www/' . $projectName;
         $targetDb = $dbName ?? 'database_name';
         $dateStr = now()->toDateTimeString();
         $dbNotice = $hasDb ? 'Yes (`database.sql`)' : 'No';
 
         // 1. Standalone Disaster Recovery Guide (RESTORE.md)
         $restoreMd = <<<MARKDOWN
-# 🛡️ Standalone Disaster Recovery Guide: {$projectName}
+# 🛡️ Disaster Recovery Guide: {$projectName}
 
 **Generated on:** {$dateStr}  
 **Archive:** `{$archiveName}`  
-**Includes Database:** {$dbNotice}  
+**Original Project Path:** `{$originalPath}`  
+**Includes Database Dump:** {$dbNotice}  
 
-If your primary server is compromised, offline, or inaccessible, this self-contained archive allows you to restore your complete project and database onto any new Linux, macOS, or Windows server without needing LaraSafe installed.
+If your primary server is compromised, offline, or inaccessible, this self-contained archive allows you to restore your complete project and database onto any new server directly without needing LaraSafe installed.
 
 ---
 
-## ⚡ Method 1: Automated 1-Click Restore (Universal)
+## ⚡ Restoration Steps
 
-The archive includes automated restoration scripts that automatically detect your project type (Next.js, React, Node.js, Laravel/PHP, Python, or Static) and configure the environment:
+### Step 1: Extract Files to Original Path
+Extract the archive directly to its intended destination directory:
 
-### On Linux / macOS:
 ```bash
-# 1. Extract the archive into your target directory:
-tar -xzf {$archiveName} -C /var/www/{$projectName}
-cd /var/www/{$projectName}
-
-# 2. Run the recovery script:
-bash restore.sh
+# Linux / macOS
+mkdir -p "{$originalPath}"
+tar -xzf "{$archiveName}" -C "{$originalPath}"
+cd "{$originalPath}"
 ```
 
-### On Windows:
 ```cmd
-rem 1. Extract the archive into your target directory
-rem 2. Open Command Prompt in the extracted directory and run:
-restore.bat
+rem Windows
+tar -xzf "{$archiveName}" -C "{$originalPath}"
+cd "{$originalPath}"
 ```
+
+All project files and directories are restored exactly as packaged.
 
 ---
-
-## 🛠️ Method 2: Manual Step-by-Step Restore
-
-### Step 1: Extract Files
-```bash
-tar -xzf {$archiveName} -C /path/to/destination
-cd /path/to/destination
-```
 
 ### Step 2: Restore Database (If Applicable)
-If this project uses MySQL and includes `database.sql`:
+
+If this project includes a database dump (`database.sql`), you can restore it using either the included helper script or standard MySQL command:
+
+#### Option A: Using the Recovery Helper Script
+- **Linux / macOS:** `bash restore.sh`
+- **Windows:** `restore.bat`
+
+#### Option B: Manual MySQL Command
 ```bash
-# Create target database:
+# 1. Create database if it does not exist:
 mysql -h 127.0.0.1 -u root -p -e "CREATE DATABASE IF NOT EXISTS \`{$targetDb}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-# Import database dump:
+# 2. Import database dump:
 mysql -h 127.0.0.1 -u root -p {$targetDb} < database.sql
 ```
 
-### Step 3: Application Setup by Framework
+---
 
-#### 🔷 Next.js / React / Node.js Projects (`package.json`)
-The complete project directory is preserved in this archive.
-```bash
-# If node_modules needs reinstallation or updating:
-npm install  # or yarn / pnpm / bun
+## 🔒 Security & Integrity Notice
 
-# Build for production:
-npm run build
-
-# Start the application:
-npm start
-# Or using PM2 process manager:
-pm2 start npm --name "{$projectName}" -- start
-```
-
-#### 🔷 Laravel / PHP Projects (`composer.json` / `artisan`)
-```bash
-# 1. Configure environment:
-cp .env.example .env
-
-# 2. Install dependencies (if vendor wasn't bundled):
-composer install --no-dev --optimize-autoloader
-
-# 3. Application keys and cache:
-php artisan key:generate
-php artisan storage:link
-php artisan config:cache
-```
-
-#### 🔷 Python Projects (`requirements.txt`)
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
+LaraSafe intentionally **does not** execute arbitrary post-restore scripts, alter host OS permissions, or parse untrusted configuration files during restoration. This eliminates privilege escalation, code injection, and tampering risks if an archive is exposed or downloaded. Host permissions and service startup remain under the strict control of the server administrator.
 
 ---
 *Created by LaraSafe Backup & Disaster Recovery System*
@@ -430,136 +398,64 @@ MARKDOWN;
 set -e
 
 echo "=========================================================="
-echo "  LaraSafe Standalone Disaster Recovery"
+echo "  LaraSafe Disaster Recovery"
 echo "  Project: {$projectName}"
 echo "=========================================================="
 echo ""
 
-# 1. Database Restoration (if database.sql is present)
-if [ -f "database.sql" ]; then
-    echo "[+] Found database.sql in backup."
-
-    # Try detecting credentials from existing .env or .env.local
-    DETECTED_HOST=""
-    DETECTED_PORT=""
-    DETECTED_NAME=""
-    DETECTED_USER=""
-
-    ENV_FILE=""
-    if [ -f ".env" ]; then
-        ENV_FILE=".env"
-    elif [ -f ".env.local" ]; then
-        ENV_FILE=".env.local"
-    fi
-
-    if [ -n "\$ENV_FILE" ]; then
-        DETECTED_HOST=\$(grep -E '^(DB_HOST|DATABASE_HOST)=' "\$ENV_FILE" | head -n1 | cut -d '=' -f2- | tr -d ' "\r')
-        DETECTED_PORT=\$(grep -E '^(DB_PORT|DATABASE_PORT)=' "\$ENV_FILE" | head -n1 | cut -d '=' -f2- | tr -d ' "\r')
-        DETECTED_NAME=\$(grep -E '^(DB_DATABASE|DATABASE_NAME)=' "\$ENV_FILE" | head -n1 | cut -d '=' -f2- | tr -d ' "\r')
-        DETECTED_USER=\$(grep -E '^(DB_USERNAME|DATABASE_USER|DB_USER)=' "\$ENV_FILE" | head -n1 | cut -d '=' -f2- | tr -d ' "\r')
-    fi
-
-    DB_HOST=\${DETECTED_HOST:-127.0.0.1}
-    DB_PORT=\${DETECTED_PORT:-3306}
-    DB_NAME=\${DETECTED_NAME:-{$targetDb}}
-    DB_USER=\${DETECTED_USER:-root}
-
-    echo "Configure target database credentials:"
-    read -p "Database Host [\$DB_HOST]: " INPUT_HOST
-    DB_HOST=\${INPUT_HOST:-\$DB_HOST}
-    read -p "Database Port [\$DB_PORT]: " INPUT_PORT
-    DB_PORT=\${INPUT_PORT:-\$DB_PORT}
-    read -p "Database Name [\$DB_NAME]: " INPUT_NAME
-    DB_NAME=\${INPUT_NAME:-\$DB_NAME}
-    read -p "Database User [\$DB_USER]: " INPUT_USER
-    DB_USER=\${INPUT_USER:-\$DB_USER}
-    read -s -p "Database Password: " DB_PASS
-    echo ""
-
-    echo "[*] Creating database '\$DB_NAME' if not exists..."
-    MYSQL_PWD="\$DB_PASS" mysql -h"\$DB_HOST" -P"\$DB_PORT" -u"\$DB_USER" -e "CREATE DATABASE IF NOT EXISTS \\\`\$DB_NAME\\\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-
-    echo "[*] Importing database.sql into '\$DB_NAME'..."
-    MYSQL_PWD="\$DB_PASS" mysql -h"\$DB_HOST" -P"\$DB_PORT" -u"\$DB_USER" "\$DB_NAME" < database.sql
-    echo "✓ Database successfully restored!"
-    echo ""
-else
-    echo "[*] No database.sql found - skipping database restore."
-    echo ""
+if [ ! -f "database.sql" ]; then
+    echo "[*] No database.sql found in this archive."
+    echo "[✓] Project files are extracted and ready."
+    exit 0
 fi
 
-# 2. Framework-Agnostic Environment Verification
-echo "----------------------------------------------------------"
-echo "  Project Environment Check"
-echo "----------------------------------------------------------"
+echo "[+] Found database.sql in extracted project."
 
-# Case A: Node.js / Next.js / React
-if [ -f "package.json" ]; then
-    echo "[✓] Detected Node.js / JavaScript project (package.json found)"
-    if [ -d "node_modules" ]; then
-        echo "[✓] node_modules directory is present from backup."
-    else
-        echo "[*] node_modules directory is missing."
-        PKG_CMD=""
-        if command -v pnpm &> /dev/null; then
-            PKG_CMD="pnpm"
-        elif command -v yarn &> /dev/null; then
-            PKG_CMD="yarn"
-        elif command -v bun &> /dev/null; then
-            PKG_CMD="bun"
-        elif command -v npm &> /dev/null; then
-            PKG_CMD="npm"
-        fi
+# Try detecting database credentials from existing .env if present
+DETECTED_HOST=""
+DETECTED_PORT=""
+DETECTED_NAME=""
+DETECTED_USER=""
 
-        if [ -n "\$PKG_CMD" ]; then
-            read -p "Run '\$PKG_CMD install' now? [Y/n]: " RUN_PKG
-            RUN_PKG=\${RUN_PKG:-Y}
-            if [[ "\$RUN_PKG" =~ ^[Yy]$ ]]; then
-                \$PKG_CMD install
-            fi
-        fi
-    fi
-
-    if grep -q '"next"' package.json 2>/dev/null; then
-        echo "[*] Next.js detected: Build with 'npm run build', run with 'npm start' or pm2."
-    elif grep -q '"react"' package.json 2>/dev/null; then
-        echo "[*] React detected: Build with 'npm run build'."
-    fi
+ENV_FILE=""
+if [ -f ".env" ]; then
+    ENV_FILE=".env"
+elif [ -f ".env.local" ]; then
+    ENV_FILE=".env.local"
 fi
 
-# Case B: PHP / Laravel
-if [ -f "composer.json" ] || [ -f "artisan" ]; then
-    echo "[✓] Detected PHP / Composer project"
-    if [ -d "vendor" ]; then
-        echo "[✓] vendor directory is present from backup."
-    else
-        if command -v composer &> /dev/null; then
-            read -p "Run 'composer install' now? [Y/n]: " RUN_COMPOSER
-            RUN_COMPOSER=\${RUN_COMPOSER:-Y}
-            if [[ "\$RUN_COMPOSER" =~ ^[Yy]$ ]]; then
-                composer install --no-dev --optimize-autoloader
-            fi
-        fi
-    fi
-
-    if [ -f "artisan" ]; then
-        if [ ! -f ".env" ] && [ -f ".env.example" ]; then
-            cp .env.example .env
-            echo "[*] Generated .env from .env.example"
-        fi
-    fi
+if [ -n "\$ENV_FILE" ]; then
+    DETECTED_HOST=\$(grep -E '^(DB_HOST|DATABASE_HOST)=' "\$ENV_FILE" | head -n1 | cut -d '=' -f2- | tr -d ' "\r')
+    DETECTED_PORT=\$(grep -E '^(DB_PORT|DATABASE_PORT)=' "\$ENV_FILE" | head -n1 | cut -d '=' -f2- | tr -d ' "\r')
+    DETECTED_NAME=\$(grep -E '^(DB_DATABASE|DATABASE_NAME)=' "\$ENV_FILE" | head -n1 | cut -d '=' -f2- | tr -d ' "\r')
+    DETECTED_USER=\$(grep -E '^(DB_USERNAME|DATABASE_USER|DB_USER)=' "\$ENV_FILE" | head -n1 | cut -d '=' -f2- | tr -d ' "\r')
 fi
 
-# Case C: Python
-if [ -f "requirements.txt" ]; then
-    echo "[✓] Detected Python project (requirements.txt found)"
-    echo "[*] You can install dependencies via: pip install -r requirements.txt"
-fi
+DB_HOST=\${DETECTED_HOST:-127.0.0.1}
+DB_PORT=\${DETECTED_PORT:-3306}
+DB_NAME=\${DETECTED_NAME:-{$targetDb}}
+DB_USER=\${DETECTED_USER:-root}
 
+echo "Enter target MySQL credentials:"
+read -p "Database Host [\$DB_HOST]: " INPUT_HOST
+DB_HOST=\${INPUT_HOST:-\$DB_HOST}
+read -p "Database Port [\$DB_PORT]: " INPUT_PORT
+DB_PORT=\${INPUT_PORT:-\$DB_PORT}
+read -p "Database Name [\$DB_NAME]: " INPUT_NAME
+DB_NAME=\${INPUT_NAME:-\$DB_NAME}
+read -p "Database User [\$DB_USER]: " INPUT_USER
+DB_USER=\${INPUT_USER:-\$DB_USER}
+read -s -p "Database Password: " DB_PASS
 echo ""
-echo "=========================================================="
-echo "✓ Restoration complete! Project files are ready."
-echo "=========================================================="
+
+echo "[*] Ensuring database '\$DB_NAME' exists..."
+MYSQL_PWD="\$DB_PASS" mysql -h"\$DB_HOST" -P"\$DB_PORT" -u"\$DB_USER" -e "CREATE DATABASE IF NOT EXISTS \\\`\$DB_NAME\\\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+echo "[*] Importing database.sql into '\$DB_NAME'..."
+MYSQL_PWD="\$DB_PASS" mysql -h"\$DB_HOST" -P"\$DB_PORT" -u"\$DB_USER" "\$DB_NAME" < database.sql
+
+echo "✓ Database successfully restored!"
+echo "✓ Project files and database are ready."
 BASH;
 
         $shPath = $stagingDir . DIRECTORY_SEPARATOR . 'restore.sh';
@@ -570,69 +466,41 @@ BASH;
         $restoreBat = <<<BAT
 @echo off
 echo ==========================================================
-echo   LaraSafe Standalone Disaster Recovery
+echo   LaraSafe Disaster Recovery
 echo   Project: {$projectName}
 echo ==========================================================
 echo.
 
-if exist "database.sql" (
-    echo [+] Found database.sql in backup.
-    set /p DB_HOST="Database Host [127.0.0.1]: "
-    if "%DB_HOST%"=="" set DB_HOST=127.0.0.1
-    set /p DB_PORT="Database Port [3306]: "
-    if "%DB_PORT%"=="" set DB_PORT=3306
-    set /p DB_NAME="Database Name [{$targetDb}]: "
-    if "%DB_NAME%"=="" set DB_NAME={$targetDb}
-    set /p DB_USER="Database User [root]: "
-    if "%DB_USER%"=="" set DB_USER=root
-    set /p DB_PASS="Database Password: "
-    echo.
-
-    echo [*] Creating database '%DB_NAME%' if not exists...
-    set MYSQL_PWD=%DB_PASS%
-    mysql -h%DB_HOST% -P%DB_PORT% -u%DB_USER% -e "CREATE DATABASE IF NOT EXISTS `%DB_NAME%` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-
-    echo [*] Importing database.sql into '%DB_NAME%'...
-    mysql -h%DB_HOST% -P%DB_PORT% -u%DB_USER% %DB_NAME% < database.sql
-    set MYSQL_PWD=
-
-    echo [OK] Database successfully restored!
-    echo.
-) else (
-    echo [*] No database.sql found - skipping database restore.
-    echo.
+if not exist "database.sql" (
+    echo [*] No database.sql found in this archive.
+    echo [OK] Project files are extracted and ready.
+    pause
+    exit /b 0
 )
 
-echo ----------------------------------------------------------
-echo   Project Environment Check
-echo ----------------------------------------------------------
-if exist "package.json" (
-    echo [OK] Detected Node.js / JavaScript project (package.json found)
-    if exist "node_modules\" (
-        echo [OK] node_modules directory is present from backup.
-    ) else (
-        echo [*] Run 'npm install' if dependencies are needed.
-    )
-)
+echo [+] Found database.sql in extracted project.
+set /p DB_HOST="Database Host [127.0.0.1]: "
+if "%DB_HOST%"=="" set DB_HOST=127.0.0.1
+set /p DB_PORT="Database Port [3306]: "
+if "%DB_PORT%"=="" set DB_PORT=3306
+set /p DB_NAME="Database Name [{$targetDb}]: "
+if "%DB_NAME%"=="" set DB_NAME={$targetDb}
+set /p DB_USER="Database User [root]: "
+if "%DB_USER%"=="" set DB_USER=root
+set /p DB_PASS="Database Password: "
+echo.
 
-if exist "composer.json" (
-    echo [OK] Detected PHP / Composer project
-    if exist "vendor\" (
-        echo [OK] vendor directory is present from backup.
-    ) else (
-        echo [*] Run 'composer install' if dependencies are needed.
-    )
-)
+echo [*] Ensuring database '%DB_NAME%' exists...
+set MYSQL_PWD=%DB_PASS%
+mysql -h%DB_HOST% -P%DB_PORT% -u%DB_USER% -e "CREATE DATABASE IF NOT EXISTS `%DB_NAME%` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-if exist "requirements.txt" (
-    echo [OK] Detected Python project (requirements.txt found)
-    echo [*] Run 'pip install -r requirements.txt' if needed.
-)
+echo [*] Importing database.sql into '%DB_NAME%'...
+mysql -h%DB_HOST% -P%DB_PORT% -u%DB_USER% %DB_NAME% < database.sql
+set MYSQL_PWD=
 
 echo.
-echo ==========================================================
-echo [OK] Restoration complete! Project files are ready.
-echo ==========================================================
+echo [OK] Database successfully restored!
+echo [OK] Project files and database are ready.
 echo.
 pause
 BAT;
